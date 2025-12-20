@@ -1,0 +1,19 @@
+# build outputs
+.zig-cache
+zig-out
+
+# misc
+.DS_Store
+*.pem
+.zed
+
+# debug
+*.log
+*.tmp
+
+# local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
