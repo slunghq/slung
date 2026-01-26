@@ -38,7 +38,7 @@
 + [ ] Stream rx/tx pool manager [[#5](https://github.com/slunghq/slung/issues/5)]
 
 ### TSM tree
-+ [ ] Skiplist
++ [x] Skip list
 + [ ] Columnar table
 + [x] Bloom filter
 
