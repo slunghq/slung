@@ -8,7 +8,7 @@
     <br />
     <a href="https://slung.tech">Homepage</a>
     ·
-    <a href="https://docs.slung.tech">Documentation</a>
+    <a href="https://slung.tech/docs">Documentation</a>
     ·
     <a href="#roadmap">Roadmap</a>
     </p>
@@ -38,7 +38,7 @@
 + [ ] Stream rx/tx pool manager [[#5](https://github.com/slunghq/slung/issues/5)]
 
 ### TSM tree
-+ [ ] Skiplist
++ [x] Skip list
 + [ ] Columnar table
 + [x] Bloom filter
 
