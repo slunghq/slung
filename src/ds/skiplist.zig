@@ -28,7 +28,6 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
         allocator: Allocator,
         rng: Rng,
         level: usize = 1,
-        max_level: usize = max_level,
 
         /// Initialise a skip list with a given allocator and rng seed.
         pub fn init(allocator: Allocator, seed: u64) !Self {

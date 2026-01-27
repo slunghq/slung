@@ -12,7 +12,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-fn BitmapImpl(size: usize) type {
+fn BitmapImpl(comptime size: usize) type {
     return struct {
         const Self = @This();
         const byte_size = if (size % 8 == 0) size / 8 else (size / 8) + 1;
@@ -244,8 +244,8 @@ test "read ops" {
     try testing.expect(!bitmap.is_dirty());
     try testing.expect(bitmap.len() == 80);
     try testing.expect(bitmap.len_bytes() == 10);
-    try testing.expect(bitmap.count_set_bits() == 4);
-    try testing.expect(bitmap.count_clear_bits() == 76);
+    try testing.expect(bitmap.count_bits_set() == 4);
+    try testing.expect(bitmap.count_bits_clear() == 76);
 }
 
 test "set/clear range" {
