@@ -8,7 +8,7 @@
     <br />
     <a href="https://slung.tech">Homepage</a>
     ·
-    <a href="https://docs.slung.tech">Documentation</a>
+    <a href="https://slung.tech/docs">Documentation</a>
     ·
     <a href="#roadmap">Roadmap</a>
     </p>
