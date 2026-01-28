@@ -1,10 +1,12 @@
 const std = @import("std");
+const table = @import("table.zig");
+const ColumnTable = table.ColumnTable;
+const cache = @import("cache.zig");
+const Cache = cache.Cache;
 const Allocator = std.mem.Allocator;
 
-const ds = @import("../ds/ds.zig");
-const Skiplist = ds.skiplist.Skiplist;
-const ColumnTable = @import("table.zig").ColumnTable;
 
 test {
-    _ = tree;
+    _ = table;
+    _ = cache;
 }
