@@ -124,9 +124,10 @@ fn BloomMutliHashFn(comptime size: usize, comptime HashFn: []const type) type {
     };
 }
 
-/// A bloom filter with a fixed size and a single hash function.
+/// A simple bloom filter implementation supporting a single hash function.
 pub const Bloom = BloomImpl;
-/// A bloom filter with a fixed size and multiple hash functions.
+/// A simple bloom filter implementation supporting multiple hash functions.
+///
 pub const BloomMultiHash = BloomMutliHashFn;
 
 pub const DefaultHashFn = struct {

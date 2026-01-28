@@ -197,6 +197,15 @@ fn BitmapImpl(comptime size: usize) type {
     };
 }
 
+/// A simple bitmap data structure implementation.
+///
+/// Bitwise operations are implemented using the bitwise AND, OR, XOR, NOT, and
+/// AND NOT logical operators. Bitwise operations modifies the bitmap in place and
+/// returns the modified bitmap. Bitwise operations can be performed on two bitmaps
+/// of the same size.
+///
+/// > [!WARNING]
+/// > This project is currently WIP and is no where near ready for production use.
 pub const Bitmap = BitmapImpl;
 
 test "mutate bitmap" {

@@ -155,6 +155,7 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
     };
 }
 
+/// A simple skip list implementation.
 pub const SkipList = SkipListImpl;
 
 pub fn compare(a: []const u8, b: []const u8) std.math.Order {
