@@ -6,12 +6,13 @@ const time = std.time;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
+const AutoHashMap = std.AutoHashMap;
 const ds = @import("../ds/ds.zig");
 const Bloom = ds.bloom.Bloom;
 const Bitmap = ds.bitmap.Bitmap;
 const Hasher = ds.bloom.DefaultHashFn;
 
-pub fn ColumnTableImpl(comptime page_size: u32) type {
+fn ColumnTableImpl(comptime page_size: u32) type {
     return struct {
         const Self = @This();
 
@@ -22,6 +23,12 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
 
         index_row: HashMap(u64),
         index_column: HashMap(u64),
+        /// the series index tracks the
+        /// starting and ending position
+        /// of a particular series entry.
+        ///
+        /// [start, end]
+        series_index: HashMap([2]u64),
 
         pub const Metadata = struct {
             number_rows: u64,
@@ -50,7 +57,7 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
             name: []const u8,
             pages: ArrayList(Page),
             null_bitmap: ?Bitmap(page_size),
-            row_offsets: ArrayList(RowOffset),
+            row_offsets: AutoHashMap(u64, RowOffset),
             current_offset: u32,
 
             pub const Page = struct {
@@ -91,7 +98,7 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
             table.metadata = Metadata{
                 .number_rows = 0,
                 .number_columns = @intCast(column_names.len),
-                // todo: consider using in-runtime clock to reduce io
+                // TODO: consider using in-runtime clock to reduce io
                 .created_at = time.timestamp(),
                 .updated_at = time.timestamp(),
             };
@@ -106,7 +113,7 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
             for (table.columns, 0..) |*column, i| {
                 column.name = try allocator.dupe(u8, column_names[i]);
                 column.pages = .empty;
-                column.row_offsets = .empty;
+                column.row_offsets = AutoHashMap(u64, Column.RowOffset).init(allocator);
                 column.current_offset = 0;
 
                 try column.pages.append(allocator, Column.Page{
@@ -129,7 +136,7 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
                     if (page.max_value) |v| self.allocator.destroy(v);
                 }
                 column.pages.deinit(self.allocator);
-                column.row_offsets.deinit(self.allocator);
+                column.row_offsets.deinit();
             }
 
             self.allocator.free(self.columns);
@@ -185,16 +192,11 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
         }
 
         fn getValueAt(self: *Self, column: *const Column, row_id: u64) !Value {
-            for (column.row_offsets.items) |row_offset| {
-                if (row_offset.row_id == row_id) {
-                    const page = column.pages.items[row_offset.page_id];
-                    const data = page.data[row_offset.offset..];
+            const row_offset = column.row_offsets.get(row_id);
+            const page = column.pages.items[row_offset.?.page_id];
+            const data = page.data[row_offset.?.offset..];
 
-                    const result = try self.deserializeValue(data, row_offset.len);
-                    return result;
-                }
-            }
-            return error.RowNotFound;
+            return try self.deserializeValue(data, row_offset.?.len);
         }
 
         pub fn insert(self: *Self, row: Row) !void {
@@ -230,7 +232,7 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
                     column.current_offset = 0;
                 }
 
-                try column.row_offsets.append(self.allocator, Column.RowOffset{
+                try column.row_offsets.put(row_id, Column.RowOffset{
                     .row_id = row_id,
                     .page_id = column.pages.items.len - 1,
                     .offset = column.current_offset,
@@ -268,8 +270,8 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
             const values = try self.allocator.alloc(Value, self.columns.len);
             errdefer self.allocator.free(values);
 
-            for (self.columns, 0..) |col, i| {
-                const data = try self.getValueAt(&col, row_id.?);
+            for (self.columns, 0..) |column, i| {
+                const data = try self.getValueAt(&column, row_id.?);
 
                 values[i] = switch (data) {
                     .Bytes => |bytes| Value{ .Bytes = try self.allocator.dupe(u8, bytes) },
@@ -282,10 +284,62 @@ pub fn ColumnTableImpl(comptime page_size: u32) type {
                 .values = values,
             };
         }
+
+        pub fn getColumn(self: *Self, column_name: []const u8) ![]Value {
+            const column_id = self.index_column.get(column_name);
+            return self.getColumnById(column_id.?);
+        }
+
+        pub fn getColumnRange(self: *Self, column_name: []const u8, start_row: u64, end_row: u64) ![]Value {
+            const column_id = self.index_column.get(column_name);
+            return self.getColumnRangeById(column_id.?, start_row, end_row);
+        }
+
+        pub fn getColumnById(self: *Self, column_id: usize) ![]Value {
+            if (column_id >= self.columns.len) return error.InvalidColumnId;
+
+            const column = &self.columns[column_id];
+            var values = try self.allocator.alloc(Value, @intCast(self.metadata.number_rows));
+            errdefer self.allocator.free(values);
+
+            var value_id: usize = 0;
+            for (column.pages.items) |page| {
+                var row = page.start;
+                while (row <= page.end) : (row += 1) {
+                    values[value_id] = try self.getValueAt(column, row);
+                    value_id += 1;
+                }
+            }
+
+            return values;
+        }
+
+        pub fn getColumnRangeById(self: *Self, column_id: usize, start_row: u64, end_row: u64) ![]Value {
+            if (column_id >= self.columns.len) return error.InvalidColumnIndex;
+            if (end_row >= self.metadata.number_rows) return error.RowOutOfBounds;
+            if (start_row > end_row) return error.InvalidRange;
+
+            const column = &self.columns[column_id];
+            const count = end_row - start_row + 1;
+            var values = try self.allocator.alloc(Value, @intCast(count));
+            errdefer self.allocator.free(values);
+
+            var value_id: usize = 0;
+
+            var row = start_row;
+            while (row <= end_row) : (row += 1) {
+                values[value_id] = try self.getValueAt(column, row);
+                value_id += 1;
+            }
+
+            return values;
+        }
+
+        // TODO: implement other get helpers
     };
 }
 
-const ColumnTable = ColumnTableImpl;
+pub const ColumnTable = ColumnTableImpl;
 
 test "column table" {
     const allocator = std.testing.allocator;
@@ -321,4 +375,61 @@ test "column table" {
     try std.testing.expectEqualStrings("Alice", result.?.values[1].Bytes);
     try std.testing.expectEqual(1, result.?.values[0].Int);
     try std.testing.expect(!result.?.values[2].Bool);
+}
+
+test "column table get column" {
+    const allocator = std.testing.allocator;
+    const page_size = 4096;
+    const column_names = [_][]const u8{ "id", "name", "age" };
+    var table = try ColumnTable(page_size).init(allocator, &column_names);
+    defer table.deinit();
+
+    const values1 = try allocator.alloc(ColumnTable(page_size).Value, 3);
+    values1[0] = .{ .Int = 1 };
+    values1[1] = .{ .Bytes = "Alice" };
+    values1[2] = .{ .Int = 19 };
+    defer allocator.free(values1);
+    const row1 = ColumnTable(page_size).Row{
+        .key = "user1",
+        .values = values1,
+    };
+    try table.insert(row1);
+
+    const values2 = try allocator.alloc(ColumnTable(page_size).Value, 3);
+    values2[0] = .{ .Int = 2 };
+    values2[1] = .{ .Bytes = "Bob" };
+    values2[2] = .{ .Int = 25 };
+    defer allocator.free(values2);
+    const row2 = ColumnTable(page_size).Row{
+        .key = "user2",
+        .values = values2,
+    };
+    try table.insert(row2);
+
+    const result = try table.getColumn("name");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("Alice", result[0].Bytes);
+    try std.testing.expectEqualStrings("Bob", result[1].Bytes);
+
+    const result2 = try table.getColumn("age");
+    defer allocator.free(result2);
+    try std.testing.expectEqual(25, result2[1].Int);
+    try std.testing.expectEqual(19, result2[0].Int);
+
+    const values3 = try allocator.alloc(ColumnTable(page_size).Value, 3);
+    values3[0] = .{ .Int = 3 };
+    values3[1] = .{ .Bytes = "Jake" };
+    values3[2] = .{ .Int = 21 };
+    defer allocator.free(values3);
+    const row3 = ColumnTable(page_size).Row{
+        .key = "user3",
+        .values = values3,
+    };
+    try table.insert(row3);
+
+    const result3 = try table.getColumnRange("age", 0, 2);
+    defer allocator.free(result3);
+    try std.testing.expectEqual(21, result3[2].Int);
+    try std.testing.expectEqual(25, result3[1].Int);
+    try std.testing.expectEqual(19, result3[0].Int);
 }
