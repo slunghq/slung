@@ -166,6 +166,10 @@ pub fn compareU64(a: u64, b: u64) std.math.Order {
     return std.math.order(a, b);
 }
 
+pub fn compareI64(a: i64, b: i64) std.math.Order {
+    return std.math.order(a, b);
+}
+
 test "skip list" {
     const allocator = std.testing.allocator;
 
