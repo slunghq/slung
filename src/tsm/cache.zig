@@ -1,13 +1,15 @@
 const std = @import("std");
+const testing = std.testing;
+const ds = @import("../ds/ds.zig");
 const Allocator = std.mem.Allocator;
 const HashMap = std.StringHashMap;
-const ds = @import("../ds/ds.zig");
 const Skiplist = ds.skiplist.SkipList;
 const ColumnTable = @import("table.zig").ColumnTable;
 
 pub const Cache = struct {
     allocator: Allocator,
     index_series: HashMap(Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64)),
+    page_size: u32,
 
     pub const DataPoint = struct {
         timestamp: i64,
@@ -30,10 +32,11 @@ pub const Cache = struct {
         }
     };
 
-    pub fn init(allocator: Allocator) Cache {
+    pub fn init(allocator: Allocator, page_size: u32) Cache {
         return Cache{
             .allocator = allocator,
             .index_series = HashMap(Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64)).init(allocator),
+            .page_size = page_size,
         };
     }
 
@@ -78,8 +81,7 @@ pub const Cache = struct {
     }
 
     /// Snapshot the cache to columnar table
-    pub fn snapshot(self: *Cache, table: *ColumnTable(4096)) !void {
-        _ = self;
+    pub fn snapshot(self: *Cache, table: *ColumnTable(self.page_size)) !void {
         _ = table;
         // table.flush();
         // impl flushing logic
@@ -87,8 +89,8 @@ pub const Cache = struct {
 };
 
 test "cache" {
-    const allocator = std.testing.allocator;
-    var cache = Cache.init(allocator);
+    const allocator = testing.allocator;
+    var cache = Cache.init(allocator, 4096);
     defer cache.deinit();
 
     const series_key = "series1";
@@ -101,11 +103,11 @@ test "cache" {
     try cache.insert(series_key, Cache.DataPoint{ .timestamp = timestamp3, .value = Cache.Value{ .Int = 36 } });
 
     const result1 = cache.get("series1", timestamp1).?;
-    try std.testing.expectEqual(10, result1.Int);
+    try testing.expectEqual(10, result1.Int);
 
     const result2 = try cache.getRange(series_key, 0, std.time.microTimestamp());
     defer allocator.free(result2);
-    try std.testing.expectEqual(36, result2[2].Int);
-    try std.testing.expectEqual(21, result2[1].Int);
-    try std.testing.expectEqual(10, result2[0].Int);
+    try testing.expectEqual(36, result2[2].Int);
+    try testing.expectEqual(21, result2[1].Int);
+    try testing.expectEqual(10, result2[0].Int);
 }

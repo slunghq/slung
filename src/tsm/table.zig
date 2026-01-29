@@ -2,12 +2,13 @@
 //!
 
 const std = @import("std");
+const testing = std.testing;
 const time = std.time;
+const ds = @import("../ds/ds.zig");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const HashMap = std.StringHashMap;
 const AutoHashMap = std.AutoHashMap;
-const ds = @import("../ds/ds.zig");
 const Bloom = ds.bloom.Bloom;
 const Bitmap = ds.bitmap.Bitmap;
 const Hasher = ds.bloom.DefaultHashFn;
@@ -372,9 +373,9 @@ test "column table" {
 
     const result = try table.get("user1");
     defer result.?.deinit(allocator);
-    try std.testing.expectEqualStrings("Alice", result.?.values[1].Bytes);
-    try std.testing.expectEqual(1, result.?.values[0].Int);
-    try std.testing.expect(!result.?.values[2].Bool);
+    try testing.expectEqualStrings("Alice", result.?.values[1].Bytes);
+    try testing.expectEqual(1, result.?.values[0].Int);
+    try testing.expect(!result.?.values[2].Bool);
 }
 
 test "column table get column" {
@@ -408,13 +409,13 @@ test "column table get column" {
 
     const result = try table.getColumn("name");
     defer allocator.free(result);
-    try std.testing.expectEqualStrings("Alice", result[0].Bytes);
-    try std.testing.expectEqualStrings("Bob", result[1].Bytes);
+    try testing.expectEqualStrings("Alice", result[0].Bytes);
+    try testing.expectEqualStrings("Bob", result[1].Bytes);
 
     const result2 = try table.getColumn("age");
     defer allocator.free(result2);
-    try std.testing.expectEqual(25, result2[1].Int);
-    try std.testing.expectEqual(19, result2[0].Int);
+    try testing.expectEqual(25, result2[1].Int);
+    try testing.expectEqual(19, result2[0].Int);
 
     const values3 = try allocator.alloc(ColumnTable(page_size).Value, 3);
     values3[0] = .{ .Int = 3 };
@@ -429,7 +430,7 @@ test "column table get column" {
 
     const result3 = try table.getColumnRange("age", 0, 2);
     defer allocator.free(result3);
-    try std.testing.expectEqual(21, result3[2].Int);
-    try std.testing.expectEqual(25, result3[1].Int);
-    try std.testing.expectEqual(19, result3[0].Int);
+    try testing.expectEqual(21, result3[2].Int);
+    try testing.expectEqual(25, result3[1].Int);
+    try testing.expectEqual(19, result3[0].Int);
 }
