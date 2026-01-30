@@ -29,7 +29,7 @@ fn ColumnTableImpl(comptime page_size: u32) type {
         /// of a particular series entry.
         ///
         /// [start, end]
-        series_index: HashMap([2]u64),
+        index_series: HashMap([2]u64),
 
         pub const Metadata = struct {
             number_rows: u64,
@@ -110,6 +110,7 @@ fn ColumnTableImpl(comptime page_size: u32) type {
             ).init();
             table.index_row = HashMap(u64).init(allocator);
             table.index_column = HashMap(u64).init(allocator);
+            table.index_series = HashMap([2]u64).init(allocator);
 
             for (table.columns, 0..) |*column, i| {
                 column.name = try allocator.dupe(u8, column_names[i]);
@@ -143,6 +144,7 @@ fn ColumnTableImpl(comptime page_size: u32) type {
             self.allocator.free(self.columns);
             self.index_row.deinit();
             self.index_column.deinit();
+            self.index_series.deinit();
 
             self.allocator.destroy(self);
         }
@@ -193,11 +195,11 @@ fn ColumnTableImpl(comptime page_size: u32) type {
         }
 
         fn getValueAt(self: *Self, column: *const Column, row_id: u64) !Value {
-            const row_offset = column.row_offsets.get(row_id);
-            const page = column.pages.items[row_offset.?.page_id];
-            const data = page.data[row_offset.?.offset..];
+            const row_offset = column.row_offsets.get(row_id) orelse return error.ValueNotFound;
+            const page = column.pages.items[row_offset.page_id];
+            const data = page.data[row_offset.offset..];
 
-            return try self.deserializeValue(data, row_offset.?.len);
+            return try self.deserializeValue(data, row_offset.len);
         }
 
         pub fn insert(self: *Self, row: Row) !void {
@@ -287,13 +289,13 @@ fn ColumnTableImpl(comptime page_size: u32) type {
         }
 
         pub fn getColumn(self: *Self, column_name: []const u8) ![]Value {
-            const column_id = self.index_column.get(column_name);
-            return self.getColumnById(column_id.?);
+            const column_id = self.index_column.get(column_name) orelse return error.ColumnNotFound;
+            return self.getColumnById(column_id);
         }
 
         pub fn getColumnRange(self: *Self, column_name: []const u8, start_row: u64, end_row: u64) ![]Value {
-            const column_id = self.index_column.get(column_name);
-            return self.getColumnRangeById(column_id.?, start_row, end_row);
+            const column_id = self.index_column.get(column_name) orelse return error.ColumnNotFound;
+            return self.getColumnRangeById(column_id, start_row, end_row);
         }
 
         pub fn getColumnById(self: *Self, column_id: usize) ![]Value {

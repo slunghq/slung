@@ -60,7 +60,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
         pub fn get(self: *Self, series_key: []const u8, timestamp: i64) ?Value {
             var skiplist = self.index_series.get(series_key) orelse return null;
 
-            return skiplist.search(timestamp).?.value;
+            return if (skiplist.search(timestamp)) |node| node.value else null;
         }
 
         pub fn getRange(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64) ![]Value {
