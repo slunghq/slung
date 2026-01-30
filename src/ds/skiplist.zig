@@ -147,8 +147,9 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
         pub fn length(self: *Self) usize {
             var lngth: usize = 0;
             var node = self.head.forward[0];
-            while (node != null) : (node = node.forward[0]) {
+            while (node) |n| {
                 lngth += 1;
+                node = n.forward[0];
             }
             return lngth;
         }
