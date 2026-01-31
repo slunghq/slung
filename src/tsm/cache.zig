@@ -5,10 +5,12 @@ const Allocator = std.mem.Allocator;
 const HashMap = std.StringHashMap;
 const Skiplist = ds.skiplist.SkipList;
 const ColumnTable = @import("table.zig").ColumnTable;
+const DiskEntry = @import("entry.zig").DiskEntry;
 
 pub fn CacheImpl(comptime page_size: u32) type {
     return struct {
         const Self = @This();
+
         allocator: Allocator,
         index_series: HashMap(Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64)),
 
@@ -80,12 +82,41 @@ pub fn CacheImpl(comptime page_size: u32) type {
             return values.toOwnedSlice(self.allocator);
         }
 
-        /// Snapshot the cache to columnar table
-        pub fn snapshot(self: *Self, table: *ColumnTable(page_size)) !void {
-            _ = self;
-            _ = table;
-            // table.flush();
-            // impl flushing logic
+        /// Snapshot the cache to columnar table and return disk entry
+        pub fn snapshot(self: *Self, tsm_name: []const u8, level: usize, table: *ColumnTable(page_size)) !?*DiskEntry {
+            // the key here is that during a snapshot we check if our existing table is populated and flush that first
+            const entry = if (table.columns.len != 0) try DiskEntry(page_size).flush(self.allocator, table, tsm_name, level) else null;
+
+            // we're ignoring tags for now
+            const column_names = [_][]const u8{ "time", "series_key", "value" };
+            table.deinit();
+            table.* = try ColumnTable(page_size).init(self.allocator, &column_names);
+
+            var iter = self.index_series.iterator();
+            while (iter.next()) |series| {
+                var iter_series: ?*Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64).Node = series.value_ptr.head.next();
+                while (iter_series) |node| : (iter_series = node.next()) {
+                    const key = try std.fmt.allocPrint(self.allocator, "{d}", .{node.key});
+                    defer self.allocator.free(key);
+
+                    const values = try self.allocator.alloc(ColumnTable(page_size).Value, 3);
+                    values[0] = .{ .Int = node.key };
+                    values[1] = .{ .Bytes = series.key_ptr.* };
+                    values[2] = switch (node.value) {
+                        .Bool => |v| .{ .Bool = v },
+                        .Int => |v| .{ .Int = v },
+                        .Float => |v| .{ .Float = v },
+                        .Bytes => |v| .{ .Bytes = v },
+                    };
+                    const row = ColumnTable(page_size).Row{
+                        .key = key,
+                        .values = values,
+                    };
+                    try table.insert(row);
+                }
+            }
+
+            return entry;
         }
     };
 }
@@ -98,19 +129,21 @@ test "cache" {
     var cache = Cache(page_size).init(allocator);
     defer cache.deinit();
 
-    const series_key = "series1";
     const timestamp1 = std.time.microTimestamp();
 
-    try cache.insert(series_key, Cache(page_size).DataPoint{ .timestamp = timestamp1, .value = Cache(page_size).Value{ .Int = 10 } });
-    try cache.insert(series_key, Cache(page_size).DataPoint{ .timestamp = std.time.microTimestamp(), .value = Cache(page_size).Value{ .Int = 21 } });
-    try cache.insert(series_key, Cache(page_size).DataPoint{ .timestamp = std.time.microTimestamp(), .value = Cache(page_size).Value{ .Int = 36 } });
+    try cache.insert("series1", Cache(page_size).DataPoint{ .timestamp = timestamp1, .value = Cache(page_size).Value{ .Int = 10 } });
+    try cache.insert("series1", Cache(page_size).DataPoint{ .timestamp = std.time.microTimestamp(), .value = Cache(page_size).Value{ .Int = 21 } });
+    try cache.insert("series1", Cache(page_size).DataPoint{ .timestamp = std.time.microTimestamp(), .value = Cache(page_size).Value{ .Int = 36 } });
+    try cache.insert("series2", Cache(page_size).DataPoint{ .timestamp = timestamp1, .value = Cache(page_size).Value{ .Int = 36 } });
 
     const result1 = cache.get("series1", timestamp1).?;
     try testing.expectEqual(10, result1.Int);
+    const result2 = cache.get("series2", timestamp1).?;
+    try testing.expectEqual(36, result2.Int);
 
-    const result2 = try cache.getRange(series_key, 0, std.time.microTimestamp());
-    defer allocator.free(result2);
-    try testing.expectEqual(36, result2[2].Int);
-    try testing.expectEqual(21, result2[1].Int);
-    try testing.expectEqual(10, result2[0].Int);
+    const result3 = try cache.getRange("series1", 0, std.time.microTimestamp());
+    defer allocator.free(result3);
+    try testing.expectEqual(36, result3[2].Int);
+    try testing.expectEqual(21, result3[1].Int);
+    try testing.expectEqual(10, result3[0].Int);
 }

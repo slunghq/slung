@@ -10,6 +10,8 @@ zig-out
 # debug
 *.log
 *.tmp
+*.dat
+*.idx
 
 # local env files
 .env
