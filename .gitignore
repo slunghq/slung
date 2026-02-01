@@ -12,6 +12,7 @@ zig-out
 *.tmp
 *.dat
 *.idx
+zig-watch*
 
 # local env files
 .env
