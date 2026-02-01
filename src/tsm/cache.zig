@@ -83,14 +83,11 @@ pub fn CacheImpl(comptime page_size: u32) type {
         }
 
         /// Snapshot the cache to columnar table and return disk entry
-        pub fn snapshot(self: *Self, tsm_name: []const u8, level: usize, table: *ColumnTable(page_size)) !?*DiskEntry {
+        pub fn snapshot(self: *Self, tsm_name: []const u8, level: usize, table: *ColumnTable(page_size)) !?*DiskEntry(page_size) {
             // the key here is that during a snapshot we check if our existing table is populated and flush that first
             const entry = if (table.columns.len != 0) try DiskEntry(page_size).flush(self.allocator, table, tsm_name, level) else null;
 
-            // we're ignoring tags for now
-            const column_names = [_][]const u8{ "time", "series_key", "value" };
-            table.deinit();
-            table.* = try ColumnTable(page_size).init(self.allocator, &column_names);
+            table.clear();
 
             var iter = self.index_series.iterator();
             var index_count: u64 = 0;
@@ -103,6 +100,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
                     defer self.allocator.free(key);
 
                     const values = try self.allocator.alloc(ColumnTable(page_size).Value, 3);
+                    defer self.allocator.free(values);
                     values[0] = .{ .Int = node.key };
                     values[1] = .{ .Bytes = series.key_ptr.* };
                     values[2] = switch (node.value) {
@@ -129,6 +127,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
 
 const Cache = CacheImpl;
 
+// TODO: clean up test
 test "cache" {
     const allocator = testing.allocator;
     const page_size = 4096;
@@ -152,4 +151,49 @@ test "cache" {
     try testing.expectEqual(36, result3[2].Int);
     try testing.expectEqual(21, result3[1].Int);
     try testing.expectEqual(10, result3[0].Int);
+
+    const column_names = [_][]const u8{ "time", "series_key", "value" };
+    var table = try ColumnTable(page_size).init(allocator, &column_names);
+    defer table.deinit();
+
+    const values1 = try allocator.alloc(ColumnTable(page_size).Value, 3);
+    values1[0] = .{ .Int = 1 };
+    values1[1] = .{ .Bytes = "series1" };
+    values1[2] = .{ .Float = 23.1 };
+    defer allocator.free(values1);
+    const row1 = ColumnTable(page_size).Row{
+        .key = "user1",
+        .values = values1,
+    };
+    try table.insert(row1);
+
+    const values2 = try allocator.alloc(ColumnTable(page_size).Value, 3);
+    values2[0] = .{ .Int = 2 };
+    values2[1] = .{ .Bytes = "series1" };
+    values2[2] = .{ .Float = 25.8 };
+    defer allocator.free(values2);
+    const row2 = ColumnTable(page_size).Row{
+        .key = "user2",
+        .values = values2,
+    };
+    try table.insert(row2);
+
+    const values3 = try allocator.alloc(ColumnTable(page_size).Value, 3);
+    values3[0] = .{ .Int = 3 };
+    values3[1] = .{ .Bytes = "series1" };
+    values3[2] = .{ .Float = 21.7 };
+    defer allocator.free(values3);
+    const row3 = ColumnTable(page_size).Row{
+        .key = "user3",
+        .values = values3,
+    };
+    try table.insert(row3);
+
+    const entry = try cache.snapshot("tsm", 0, table);
+    if (entry) |en| {
+        defer en.deinit();
+    }
+    const result = try table.getColumn("time");
+    defer allocator.free(result);
+    try testing.expectEqual(timestamp1, result[1].Int);
 }

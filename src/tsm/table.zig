@@ -149,6 +149,32 @@ fn ColumnTableImpl(comptime page_size: u32) type {
             self.allocator.destroy(self);
         }
 
+        pub fn clear(self: *Self) void {
+            self.bloom = Bloom(1024, Hasher).init();
+            self.index_row.clearRetainingCapacity();
+            self.index_series.clearRetainingCapacity();
+
+            for (self.columns) |*column| {
+                while (column.pages.items.len > 1) {
+                    _ = column.pages.pop();
+                }
+                if (column.pages.items.len > 0) {
+                    column.pages.items[0] = Column.Page{
+                        .data = std.mem.zeroes([page_size]u8),
+                        .start = 0,
+                        .end = 0,
+                        .min_value = null,
+                        .max_value = null,
+                    };
+                }
+                column.row_offsets.clearRetainingCapacity();
+                column.current_offset = 0;
+            }
+
+            self.metadata.number_rows = 0;
+            self.metadata.updated_at = time.timestamp();
+        }
+
         fn serializeValue(self: *Self, value: Value) ![]u8 {
             var buffer: ArrayList(u8) = .empty;
             defer buffer.deinit(self.allocator);
