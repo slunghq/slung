@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-echo "Watching Zig files for changes (build only)... (Press Ctrl+C to stop)"
-find src -name "*.zig" | entr -c zig build
