@@ -73,13 +73,16 @@ fn DiskEntryImpl(comptime page_size: u32) type {
                 try entry.writeColumn(column, column_id);
             }
 
-            const bloom_offset = try entry.file_index.getPos();
+            const offset_bloom = try entry.file_index.getPos();
             try entry.writeBloomFilter(&table.bloom);
 
-            const row_index_offset = try entry.file_index.getPos();
+            const offset_index_row = try entry.file_index.getPos();
             try entry.writeRowIndex(&table.index_row);
 
-            try entry.writeFooter(bloom_offset, row_index_offset);
+            const offset_index_series = try entry.file_index.getPos();
+            try entry.writeSeriesIndex(&table.index_series);
+
+            try entry.writeFooter(offset_bloom, offset_index_row, offset_index_series);
 
             return entry;
         }
@@ -155,6 +158,23 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             try writer_index.interface.flush();
         }
 
+        fn writeSeriesIndex(self: *Self, index: *const HashMap([2]u64)) !void {
+            var buffer: [8192]u8 = undefined;
+            var writer_index = self.file_index.writer(&buffer);
+
+            try writer_index.interface.writeInt(u64, @intCast(index.count()), .little);
+
+            var iter = index.iterator();
+            while (iter.next()) |entry| {
+                const key_len: u32 = @intCast(entry.key_ptr.len);
+                try writer_index.interface.writeInt(u32, key_len, .little);
+                try writer_index.interface.writeAll(entry.key_ptr.*);
+                try writer_index.interface.writeAll(std.mem.asBytes(&entry.value_ptr.*));
+            }
+
+            try writer_index.interface.flush();
+        }
+
         fn writeRowIndex(self: *Self, index: *const HashMap(u64)) !void {
             var buffer: [8192]u8 = undefined;
             var writer_index = self.file_index.writer(&buffer);
@@ -172,14 +192,15 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             try writer_index.interface.flush();
         }
 
-        fn writeFooter(self: *Self, bloom_offset: u64, row_index_offset: u64) !void {
+        fn writeFooter(self: *Self, offset_bloom: u64, offset_index_row: u64, offset_index_series: u64) !void {
             var buffer: [8192]u8 = undefined;
             var writer_index = self.file_index.writer(&buffer);
 
             const footer_start = try self.file_index.getPos();
 
-            try writer_index.interface.writeInt(u64, bloom_offset, .little);
-            try writer_index.interface.writeInt(u64, row_index_offset, .little);
+            try writer_index.interface.writeInt(u64, offset_bloom, .little);
+            try writer_index.interface.writeInt(u64, offset_index_row, .little);
+            try writer_index.interface.writeInt(u64, offset_index_series, .little);
 
             try writer_index.interface.writeInt(u64, self.metadata.number_rows, .little);
             try writer_index.interface.writeInt(u32, self.metadata.number_columns, .little);

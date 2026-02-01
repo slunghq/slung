@@ -93,8 +93,11 @@ pub fn CacheImpl(comptime page_size: u32) type {
             table.* = try ColumnTable(page_size).init(self.allocator, &column_names);
 
             var iter = self.index_series.iterator();
+            var index_count: u64 = 0;
             while (iter.next()) |series| {
                 var iter_series: ?*Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64).Node = series.value_ptr.head.next();
+                var index_series: [2]u64 = undefined;
+                index_series[0] = index_count;
                 while (iter_series) |node| : (iter_series = node.next()) {
                     const key = try std.fmt.allocPrint(self.allocator, "{d}", .{node.key});
                     defer self.allocator.free(key);
@@ -113,7 +116,10 @@ pub fn CacheImpl(comptime page_size: u32) type {
                         .values = values,
                     };
                     try table.insert(row);
+                    index_series[1] = index_count;
+                    index_count += 1;
                 }
+                try table.index_series.put(series.key_ptr.*, index_series);
             }
 
             return entry;
