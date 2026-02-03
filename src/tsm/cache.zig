@@ -12,6 +12,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
         const Self = @This();
 
         allocator: Allocator,
+        // TODO: maybe store skiplist alongside tags??
         index_series: HashMap(Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64)),
 
         pub const DataPoint = struct {
@@ -19,21 +20,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
             value: Value,
         };
 
-        pub const Value = union(enum) {
-            Bool: bool,
-            Int: i64,
-            Float: f64,
-            Bytes: []const u8,
-
-            pub fn compare(self: Value, b: Value) std.math.Order {
-                return switch (self) {
-                    .Int => |val| std.math.order(val, b.Int),
-                    .Float => |val| std.math.order(val, b.Float),
-                    .Bytes => |val| std.mem.order(u8, val, b.Bytes),
-                    .Bool => |val| std.math.order(@intFromBool(val), @intFromBool(b.Bool)),
-                };
-            }
-        };
+        pub const Value = ColumnTable(page_size).Value;
 
         pub fn init(allocator: Allocator) Self {
             return Self{
@@ -85,7 +72,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
         /// Snapshot the cache to columnar table and return disk entry
         pub fn snapshot(self: *Self, tsm_name: []const u8, level: usize, table: *ColumnTable(page_size)) !?*DiskEntry(page_size) {
             // the key here is that during a snapshot we check if our existing table is populated and flush that first
-            const entry = if (table.columns.len != 0) try DiskEntry(page_size).flush(self.allocator, table, tsm_name, level) else null;
+            const entry = if (table.metadata.number_rows != 0) try DiskEntry(page_size).flush(self.allocator, table, tsm_name, level) else null;
 
             table.clear();
 
@@ -103,20 +90,18 @@ pub fn CacheImpl(comptime page_size: u32) type {
                     defer self.allocator.free(values);
                     values[0] = .{ .Int = node.key };
                     values[1] = .{ .Bytes = series.key_ptr.* };
-                    values[2] = switch (node.value) {
-                        .Bool => |v| .{ .Bool = v },
-                        .Int => |v| .{ .Int = v },
-                        .Float => |v| .{ .Float = v },
-                        .Bytes => |v| .{ .Bytes = v },
-                    };
+                    values[2] = node.value;
                     const row = ColumnTable(page_size).Row{
                         .key = key,
                         .values = values,
                     };
                     try table.insert(row);
-                    index_series[1] = index_count;
                     index_count += 1;
                 }
+
+                // the prior index_count belongs to the last item of the given series
+                index_series[1] = index_count - 1;
+
                 try table.index_series.put(series.key_ptr.*, index_series);
             }
 
