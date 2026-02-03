@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const ds = @import("../ds/ds.zig");
 const Allocator = std.mem.Allocator;
-const HashMap = std.StringHashMap;
+const HashMap = std.StringArrayHashMap;
 const Skiplist = ds.skiplist.SkipList;
 const ColumnTable = @import("table.zig").ColumnTable;
 const DiskEntry = @import("entry.zig").DiskEntry;
@@ -177,8 +177,36 @@ test "cache" {
     const entry = try cache.snapshot("tsm", 0, table);
     if (entry) |en| {
         defer en.deinit();
+
+        const result = try en.getColumnById(1);
+        defer {
+            for (result) |value| {
+                if (value == .Bytes) {
+                    allocator.free(value.Bytes);
+                }
+            }
+            allocator.free(result);
+        }
+        try testing.expectEqualStrings("series1", result[0].Bytes);
     }
-    const result = try table.getColumn("time");
-    defer allocator.free(result);
-    try testing.expectEqual(timestamp1, result[1].Int);
+
+    const result4 = try table.getColumn("time");
+    defer allocator.free(result4);
+    try testing.expectEqual(timestamp1, result4[3].Int);
+
+    var discard_entry = try DiskEntry(page_size).flush(allocator, table, "tsm", 1);
+    defer discard_entry.deinit();
+    var entry2 = try DiskEntry(page_size).open(allocator, "tsm", 1);
+    defer entry2.deinit();
+
+    const result = try entry2.getColumnById(1);
+    defer {
+        for (result) |value| {
+            if (value == .Bytes) {
+                allocator.free(value.Bytes);
+            }
+        }
+        allocator.free(result);
+    }
+    try testing.expectEqualStrings("series2", result[3].Bytes);
 }
