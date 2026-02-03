@@ -117,6 +117,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             _ = try entry.writeFooter(&writer_index, &pos_index, offset_bloom, offset_index_row, offset_index_series);
 
             try writer_data.interface.flush();
+            try writer_index.interface.flush();
 
             return entry;
         }

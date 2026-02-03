@@ -156,7 +156,11 @@ fn ColumnTableImpl(comptime page_size: u32) type {
 
             for (self.columns) |*column| {
                 while (column.pages.items.len > 1) {
-                    _ = column.pages.pop();
+                    const page = column.pages.pop();
+                    if (page) |page_value| {
+                        if (page_value.min_value) |v| self.allocator.destroy(v);
+                        if (page_value.max_value) |v| self.allocator.destroy(v);
+                    }
                 }
                 if (column.pages.items.len > 0) {
                     column.pages.items[0] = Column.Page{
