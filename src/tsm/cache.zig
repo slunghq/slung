@@ -72,6 +72,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
         /// Snapshot the cache to columnar table and return disk entry
         pub fn snapshot(self: *Self, tsm_name: []const u8, level: usize, table: *ColumnTable(page_size)) !?*DiskEntry(page_size) {
             // the key here is that during a snapshot we check if our existing table is populated and flush that first
+            // TODO: should we populate first, then flush?
             const entry = if (table.metadata.number_rows != 0) try DiskEntry(page_size).flush(self.allocator, table, tsm_name, level) else null;
 
             table.clear();
@@ -199,7 +200,7 @@ test "cache" {
     var entry2 = try DiskEntry(page_size).open(allocator, "tsm", 1);
     defer entry2.deinit();
 
-    const result = try entry2.getColumnById(1);
+    const result = try entry2.getColumn("series_key");
     defer {
         for (result) |value| {
             if (value == .Bytes) {

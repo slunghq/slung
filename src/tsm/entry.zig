@@ -24,6 +24,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
         file_data: fs.File,
         file_index: fs.File,
         index_row: HashMap(u64),
+        index_column: HashMap(u64),
         index_series: HashMap([2]u64),
         bloom: Bloom(1024, Hasher),
 
@@ -78,6 +79,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             entry.file_index = try fs.cwd().createFile(path_index, .{ .read = true });
 
             entry.index_row = HashMap(u64).init(allocator);
+            entry.index_column = HashMap(u64).init(allocator);
             entry.index_series = HashMap([2]u64).init(allocator);
             entry.bloom = Bloom(1024, Hasher).init();
 
@@ -127,6 +129,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             self.file_index.close();
             self.allocator.free(self.file_path);
             self.index_row.deinit();
+            self.index_column.deinit();
             self.index_series.deinit();
             self.bloom.deinit();
             for (self.column_descriptors) |column_descriptor| {
@@ -142,6 +145,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             var total_data_size: u64 = 0;
 
             try writer_index.interface.writeInt(u32, @intCast(column.pages.items.len), .little);
+            try self.index_column.put(column.name, @intCast(column_id));
             pos_index.* += @sizeOf(u32);
 
             var pos_data: u64 = data_start;
@@ -298,6 +302,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             entry.file_index = try fs.cwd().openFile(path_index, .{});
 
             entry.index_row = HashMap(u64).init(allocator);
+            entry.index_column = HashMap(u64).init(allocator);
             entry.index_series = HashMap([2]u64).init(allocator);
             entry.bloom = Bloom(1024, Hasher).init();
 
@@ -306,7 +311,17 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             return entry;
         }
 
-        pub fn getColumnById(self: *Self, column_id: u64) ![]ColumnTable(page_size).Value {
+        pub fn getColumn(self: *Self, column_name: []const u8) ![]Value {
+            const column_id = self.index_column.get(column_name) orelse return error.ColumnNotFound;
+            return self.getColumnById(column_id);
+        }
+
+        pub fn getColumnRange(self: *Self, column_name: []const u8, start_row: u64, end_row: u64) ![]Value {
+            const column_id = self.index_column.get(column_name) orelse return error.ColumnNotFound;
+            return self.getColumnRangeById(column_id, start_row, end_row);
+        }
+
+        pub fn getColumnById(self: *Self, column_id: u64) ![]Value {
             var buffer_index: [8192]u8 = undefined;
             var reader_index = self.file_index.reader(&buffer_index);
             var buffer_data: [8192]u8 = undefined;
@@ -355,7 +370,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             return values;
         }
 
-        pub fn getColumnRangeById(self: *Self, column_id: u64, start_row: u64, end_row: u64) ![]ColumnTable(page_size).Value {
+        pub fn getColumnRangeById(self: *Self, column_id: u64, start_row: u64, end_row: u64) ![]Value {
             if (column_id >= self.column_descriptors.len) return error.InvalidColumnId;
             if (end_row >= self.metadata.number_rows) return error.InvalidRange;
             if (start_row > end_row) return error.InvalidRange;
@@ -487,10 +502,12 @@ fn DiskEntryImpl(comptime page_size: u32) type {
 
             self.column_descriptors = try self.allocator.alloc(ColumnDescriptor, self.metadata.number_columns);
 
-            for (self.column_descriptors) |*desc| {
+            for (self.column_descriptors, 0..) |*desc, desc_id| {
                 const name_len = try reader_index.interface.takeInt(u32, .little);
                 const name = try self.allocator.alloc(u8, name_len);
                 _ = try reader_index.interface.readSliceAll(name);
+
+                try self.index_column.put(name, @intCast(desc_id));
 
                 desc.* = ColumnDescriptor{
                     .name = name,
