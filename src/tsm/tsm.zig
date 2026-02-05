@@ -24,15 +24,15 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
         pub const DataPoint = Cache(page_size).DataPoint;
         pub const Value = ColumnTable(page_size).Value;
 
-        pub fn init(allocator: Allocator, name: []const u8) !*Self {
+        pub fn init(allocator: Allocator, name: []const u8) !Self {
             // we're ignoring tags for now
             const column_names = [_][]const u8{ "time", "series_key", "value" };
             return Self{
                 .allocator = allocator,
                 .name = try allocator.dupe(u8, name),
-                .entries = [_]*DiskEntry{null} ** max_level,
+                .entries = [_]*DiskEntry{page_size} ** max_level,
                 .cache = Cache(page_size).init(allocator),
-                .table = try ColumnTable(column_names).init(allocator),
+                .table = try ColumnTable(page_size).init(allocator, &column_names),
             };
         }
 
@@ -44,18 +44,18 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
         }
 
         pub fn insert(self: *Self, series_key: []const u8, data_point: DataPoint) !void {
-            self.cache.insert(series_key, data_point);
+            try self.cache.insert(series_key, data_point);
         }
 
         pub fn insertBulk(self: *Self, series_key: []const u8, data_points: []DataPoint) !void {
             for (data_points) |data_point| {
-                self.cache.insert(series_key, data_point);
+                try self.cache.insert(series_key, data_point);
             }
         }
 
         pub fn insertBulkSeries(self: *Self, series_keys: []const []const u8, data_points: [][]DataPoint) !void {
             for (series_keys, data_points) |series_key, data_point| {
-                self.insertBulk(series_key, data_point);
+                try self.insertBulk(series_key, data_point);
             }
         }
 
@@ -67,11 +67,11 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
             const series_ids = self.table.index_series.get(series_key) orelse error.InvalidSeries;
             const time_values = try self.table.getColumnRange("time", series_ids[0], series_ids[1]);
 
-            var timestamp_ids: [2]u64 = undefined;
+            var timestamp_ids: [2]?u64 = .{ null, null };
             for (time_values, series_ids[0]..series_ids[1]) |time, time_id| {
                 if (time.Int >= timestamp_start and time.Int <= timestamp_end) {
-                    if (timestamp_ids and time.Int <= timestamp_ids[0]) timestamp_ids[0] = @intCast(time_id);
-                    if (timestamp_ids and time.Int >= timestamp_ids[1]) timestamp_ids[1] = @intCast(time_id);
+                    if (timestamp_ids[0] == null or time_id < timestamp_ids[0].?) timestamp_ids[0] = @intCast(time_id);
+                    if (timestamp_ids[1] == null or time_id > timestamp_ids[1].?) timestamp_ids[1] = @intCast(time_id);
                 }
             }
             return try self.table.getColumnRange("value", timestamp_ids[0], timestamp_ids[1]);
@@ -95,6 +95,8 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
                 @memcpy(values[offset..][0..values_entry.len], &values_entry);
                 offset += values_entry.len;
             }
+
+            return values;
         }
 
         pub fn query(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64, op: QueryOp) !Value {
@@ -119,14 +121,14 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
                 .MIN => blk: {
                     var min = values[0].Float;
                     for (values) |value| {
-                        if (value.compare(min) == .lt) min = value.Float;
+                        if (value.compare(Value{ .Float = min }) == .lt) min = value.Float;
                     }
                     break :blk Value{ .Float = min };
                 },
                 .MAX => blk: {
                     var max = values[0].Float;
                     for (values) |value| {
-                        if (value.compare(max) == .gt) max = value.Float;
+                        if (value.compare(Value{ .Float = max }) == .gt) max = value.Float;
                     }
                     break :blk Value{ .Float = max };
                 },
@@ -149,7 +151,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
             const value_disk = try self.queryDisk(series_key, timestamp_start, timestamp_end);
             defer self.allocator.free(value_disk);
 
-            return try std.mem.concat(u8, self.allocator, &.{ value_cache, value_table, value_disk });
+            return try std.mem.concat(self.allocator, Value, &.{ value_cache, value_table, value_disk });
         }
 
         pub fn queryLatest(self: *Self, series_key: []const u8) !DataPoint {
@@ -169,7 +171,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
                     if (self.table.metadata.number_rows > 0) {
                         const series_ids = self.table.index_series.get(series_key) orelse break :blk2;
                         const time = self.table.getByRow("time", series_ids[1]) catch break :blk2;
-                        const value = try self.table.getByRow("value", series_ids[1]) catch break :blk2;
+                        const value = self.table.getByRow("value", series_ids[1]) catch break :blk2;
 
                         datapoint.timestamp = time.Int;
                         datapoint.value = value;
@@ -180,8 +182,8 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
                     if (self.entries_count > 0 and self.entries[0].metadata.number_rows > 0) {
                         const en = self.entries[0];
                         const series_ids = self.entries[0].index_series.get(series_key) orelse break :blk3;
-                        const time = en.getColumn("time", series_ids[0], series_ids[1]) catch break :blk3;
-                        const value = en.getColumn("value", series_ids[0], series_ids[1]) catch break :blk3;
+                        const time = en.getColumnRange("time", series_ids[0], series_ids[1]) catch break :blk3;
+                        const value = en.getColumnRange("value", series_ids[0], series_ids[1]) catch break :blk3;
 
                         datapoint.timestamp = time[time.len - 1].Int;
                         datapoint.value = value[value.len - 1];
@@ -200,12 +202,12 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
             const blk = blk: {
                 if (self.entries_count > 0) {
                     var entry_id = self.entries_count - 1;
-                    while (entry_id <= 0) {
+                    while (entry_id > 0) {
                         const en = self.entries[entry_id];
                         if (en.metadata.number_rows > 0) {
                             const series_ids = en.index_series.get(series_key) orelse continue;
-                            const time = en.getColumn("time", series_ids[0], series_ids[1]) catch continue;
-                            const value = en.getColumn("value", series_ids[0], series_ids[1]) catch continue;
+                            const time = en.getColumnRange("time", series_ids[0], series_ids[1]) catch continue;
+                            const value = en.getColumnRange("value", series_ids[0], series_ids[1]) catch continue;
 
                             datapoint.timestamp = time[0].Int;
                             datapoint.value = value[0];
