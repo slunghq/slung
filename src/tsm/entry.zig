@@ -400,7 +400,7 @@ fn DiskEntryImpl(comptime page_size: u32) type {
                 };
             }
 
-            var values = try self.allocator.alloc(Value, @intCast(self.metadata.number_rows));
+            var values = try self.allocator.alloc(Value, @intCast(end_row - start_row + 1));
             var index_values: usize = 0;
             for (page_descriptors, 0..) |page_desc, page_id| {
                 if (page_desc.end_row < start_row or page_desc.start_row > end_row) {

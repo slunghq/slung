@@ -28,6 +28,7 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
         allocator: Allocator,
         rng: Rng,
         level: usize = 1,
+        last_inserted: ?*Node = null,
 
         /// Initialise a skip list with a given allocator and rng seed.
         pub fn init(allocator: Allocator, seed: u64) !Self {
@@ -102,6 +103,7 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
                 node.forward[i] = update[i].forward[i];
                 update[i].forward[i] = node;
             }
+            self.last_inserted = node;
 
             return node;
         }

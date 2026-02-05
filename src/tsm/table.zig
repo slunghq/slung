@@ -368,6 +368,20 @@ fn ColumnTableImpl(comptime page_size: u32) type {
             return values;
         }
 
+        pub fn getLatest(self: *Self, column_name: []const u8) !Value {
+            const column_id = self.index_column.get(column_name) orelse error.ColumnNotFound;
+            const column = &self.columns[column_id];
+            return try self.getValueAt(column, @intCast(column.pages.items.len - 1));
+        }
+
+        pub fn getByRow(self: *Self, column_name: []const u8, row: u64) !Value {
+            if (row >= self.metadata.number_rows) return error.RowOutOfBounds;
+
+            const column_id = self.index_column.get(column_name) orelse error.ColumnNotFound;
+            const column = &self.columns[column_id];
+            return try self.getValueAt(column, row);
+        }
+
         // TODO: implement other get helpers
     };
 }
