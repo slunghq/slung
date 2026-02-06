@@ -39,12 +39,12 @@
 
           shellHook = ''
                         echo "Zig version: $(zig version)"
-                        echo "Development environment ready for raylib!"
+                        echo "Development environment!"
                         echo ""
                         echo "Commands:"
-                        echo "  zig build run          - Build and run once"
+                        echo "  zig build run         - Build and run once"
                         echo "  zig-watch             - Watch files and auto-rebuild/run"
-                        echo "  zig-watch-build       - Watch files and auto-rebuild only"
+                        echo "  zig-watch-test        - Watch files and auto-rebuild/test"
                         echo ""
 
                         # Create helper scripts for file watching
@@ -54,13 +54,15 @@
             find src -name "*.zig" | entr -c -r zig build run
             EOF
                         chmod +x zig-watch
+                        alias zig-watch=./zig-watch
 
-                        cat > zig-watch-build << 'EOF'
+                        cat > zig-watch-test << 'EOF'
             #!/usr/bin/env bash
-            echo "Watching Zig files for changes (build only)... (Press Ctrl+C to stop)"
-            find src -name "*.zig" | entr -c zig build
+            echo "Watching Zig files for changes (test)... (Press Ctrl+C to stop)"
+            find src -name "*.zig" | entr -c zig build test
             EOF
-                        chmod +x zig-watch-build
+                        chmod +x zig-watch-test
+                        alias zig-watch-test=./zig-watch-test
           '';
         };
       }
