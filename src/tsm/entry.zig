@@ -116,6 +116,11 @@ fn DiskEntryImpl(comptime page_size: u32) type {
             const offset_index_series = pos_index;
             pos_index = try entry.writeSeriesIndex(&writer_index, &pos_index, &table.index_series);
 
+            var series_iter = table.index_series.iterator();
+            while (series_iter.next()) |kv| {
+                try entry.index_series.put(kv.key_ptr.*, kv.value_ptr.*);
+            }
+
             _ = try entry.writeFooter(&writer_index, &pos_index, offset_bloom, offset_index_row, offset_index_series);
 
             try writer_data.interface.flush();

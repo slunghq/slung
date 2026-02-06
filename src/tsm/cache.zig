@@ -14,6 +14,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
         allocator: Allocator,
         // TODO: maybe store skiplist alongside tags??
         index_series: HashMap(Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64)),
+        count: u64 = 0,
 
         pub const DataPoint = struct {
             timestamp: i64,
@@ -44,6 +45,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
                 series.value_ptr.* = skiplist;
             }
             _ = try series.value_ptr.*.insert(data_point.timestamp, data_point.value);
+            self.count += 1;
         }
 
         pub fn get(self: *Self, series_key: []const u8, timestamp: i64) ?Value {
@@ -111,7 +113,7 @@ pub fn CacheImpl(comptime page_size: u32) type {
     };
 }
 
-const Cache = CacheImpl;
+pub const Cache = CacheImpl;
 
 // TODO: clean up test
 test "cache" {
