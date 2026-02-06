@@ -19,9 +19,9 @@
 
 
 ## Roadmap
-|  #  | Objective                                                                  | Status |
-| :-: | -------------------------------------------------------------------------- | :----: |
-|  1  | Stream ingestion [[#1](https://github.com/slunghq/slung/issues/1)]           |   📅   |
+|  #  | Objective                                                                    | Status |
+| :-: | ---------------------------------------------------------------------------- | :----: |
+|  1  | Stream pipeline [[#1](https://github.com/slunghq/slung/issues/1)]           |   📅   |
 |  2  | TSM tree [[#2](https://github.com/slunghq/slung/issues/2)]                   |   ⚠️   |
 |  3  | Parallel data query engine [[#3](https://github.com/slunghq/slung/issues/3)] |   📅   |
 |  4  | Wasm execution                                                               |   📅   |
@@ -33,14 +33,18 @@
 + 📅 Planned: Queued for development; architecture defined.
 + 🚫 Deferred: Not currently in scope for the current milestone.
 
-### Stream ingestion
+### Stream pipeline
 + [ ] Non-blocking websocket channel [[#4](https://github.com/slunghq/slung/issues/4)]
 + [ ] Stream rx/tx pool manager [[#5](https://github.com/slunghq/slung/issues/5)]
++ [ ] Multi-threaded networking (config)
 
 ### TSM tree
-+ [x] Skip list
-+ [ ] Columnar table
-+ [x] Bloom filter
++ [x] Cache (Skip list)
++ [x] Columnar table
++ [x] AMQ Filter (Bloom filter)
++ [x] Disk entry
++ [ ] Compaction and encoding
++ [ ] Advanced AMQ (Quotient filter)
 
 ### Parallel query engine
 + [ ] Query DSL [[#6](https://github.com/slunghq/slung/issues/6)]

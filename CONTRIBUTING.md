@@ -25,10 +25,10 @@ nix develop
 zig build test
 
 # Watch for changes and run programme
-./zig-watch
+zig-watch
 
 # Watch for changes and run tests
-./zig-watch-test
+zig-watch-test
 ```
 
 ### Style & Standards
@@ -37,8 +37,8 @@ zig build test
 + Compound names should go from most significant to least significant item. E.g., use `index_row`, `index_column` over `row_index`, `column_index`. This helps with grouping items in our codebase.
 + Add tests to new feature.
 + Comments are currently optional but helpful when necessary.
-+ Ask before using of any external dependencies.
++ Ask before using any external dependencies.
 + Keep changes **SIMPLE**! We should be able to look at your code and know what it does.
-+ Ensure commits simple and useful, following [Convention Commits](https://www.conventionalcommits.org/en/v1.0.0/).
++ Ensure commits simple and useful, following [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 Thank you for taking the time to contribute! We value your time and hope you value ours ❤️.
