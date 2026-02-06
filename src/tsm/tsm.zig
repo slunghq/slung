@@ -151,6 +151,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
                     break :blk Value{ .Float = sum / count };
                 },
                 .MIN => blk: {
+                    if (values.len == 0) break :blk Value{ .Float = 0.0 };
                     var min = values[0].Float;
                     for (values) |value| {
                         if (value.compare(Value{ .Float = min }) == .lt) min = value.Float;
@@ -158,6 +159,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
                     break :blk Value{ .Float = min };
                 },
                 .MAX => blk: {
+                    if (values.len == 0) break :blk Value{ .Float = 0.0 };
                     var max = values[0].Float;
                     for (values) |value| {
                         if (value.compare(Value{ .Float = max }) == .gt) max = value.Float;
