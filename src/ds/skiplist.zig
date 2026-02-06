@@ -28,7 +28,7 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
         allocator: Allocator,
         rng: Rng,
         level: usize = 1,
-        max_level: usize = max_level,
+        last_inserted: ?*Node = null,
 
         /// Initialise a skip list with a given allocator and rng seed.
         pub fn init(allocator: Allocator, seed: u64) !Self {
@@ -103,6 +103,7 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
                 node.forward[i] = update[i].forward[i];
                 update[i].forward[i] = node;
             }
+            self.last_inserted = node;
 
             return node;
         }
@@ -148,14 +149,16 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
         pub fn length(self: *Self) usize {
             var lngth: usize = 0;
             var node = self.head.forward[0];
-            while (node != null) : (node = node.forward[0]) {
+            while (node) |n| {
                 lngth += 1;
+                node = n.forward[0];
             }
             return lngth;
         }
     };
 }
 
+/// A simple skip list implementation.
 pub const SkipList = SkipListImpl;
 
 pub fn compare(a: []const u8, b: []const u8) std.math.Order {
@@ -163,6 +166,10 @@ pub fn compare(a: []const u8, b: []const u8) std.math.Order {
 }
 
 pub fn compareU64(a: u64, b: u64) std.math.Order {
+    return std.math.order(a, b);
+}
+
+pub fn compareI64(a: i64, b: i64) std.math.Order {
     return std.math.order(a, b);
 }
 
