@@ -35,4 +35,23 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
+
+    const billions_exe = b.addExecutable(.{
+        .name = "billions",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("billions.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{},
+        }),
+    });
+
+    b.installArtifact(billions_exe);
+
+    const billions_run_step = b.step("billions", "Run the billions benchmark");
+
+    const billions_run_cmd = b.addRunArtifact(billions_exe);
+    billions_run_step.dependOn(&billions_run_cmd.step);
+
+    billions_run_cmd.step.dependOn(b.getInstallStep());
 }
