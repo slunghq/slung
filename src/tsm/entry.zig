@@ -11,8 +11,10 @@ const Hasher = ds.bloom.DefaultHashFn;
 const gorilla = @import("gorilla.zig");
 
 pub const TimestampEncoding = enum {
-    delta, // Zigzag varint delta encoding - faster queries
-    gorilla, // Delta-of-delta bit encoding - better compression
+    /// Zigzag varint delta encoding - faster queries
+    delta,
+    /// Delta-of-delta bit encoding - better compression
+    gorilla,
 };
 
 fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) type {

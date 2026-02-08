@@ -21,8 +21,8 @@
 ## Roadmap
 |  #  | Objective                                                                    | Status |
 | :-: | ---------------------------------------------------------------------------- | :----: |
-|  1  | Stream pipeline [[#1](https://github.com/slunghq/slung/issues/1)]           |   📅   |
-|  2  | TSM tree [[#2](https://github.com/slunghq/slung/issues/2)]                   |   ⚠️   |
+|  1  | Stream pipeline [[#1](https://github.com/slunghq/slung/issues/1)]            |   📅   |
+|  2  | TSM tree [[#2](https://github.com/slunghq/slung/issues/2)]                   |   ✅   |
 |  3  | Parallel data query engine [[#3](https://github.com/slunghq/slung/issues/3)] |   📅   |
 |  4  | Wasm execution                                                               |   📅   |
 |  5  | Write-ahead log (WAL)                                                        |   🚫   |
@@ -40,11 +40,34 @@
 
 ### TSM tree
 + [x] Cache (Skip list)
-+ [x] Columnar table
-+ [x] AMQ Filter (Bloom filter)
 + [x] Disk entry
-+ [ ] Compaction and encoding
-+ [ ] Advanced AMQ (Quotient filter)
++ [x] AMQ Filter (Bloom filter)
++ [x] Encoding (Gorilla/delta)
++ [ ] Compaction
+
+Optimisation: ReleaseFast. i5-10210U. SAMSUNG MZVLB256HAHQ-000H1:
+
+```
+...
+ingested 1 billion in 772.57s
+write latency per item: 772ns
+write speed: 1295336 WPS
+peak mem: 575 MiB
+
+--- Storage ---
+  Total: 9116360690 bytes (8.49 GB)
+  Bytes per point: 9.12
+
+--- Query Benchmark ---
+  Querying h-9 range 999000000-999999999 (1M points)
+  avg: 49.9944
+  Run 1: 168.19ms
+  Run 2: 166.62ms
+  Run 3: 157.24ms
+  Run 4: 158.76ms
+  Run 5: 159.87ms
+...
+```
 
 ### Parallel query engine
 + [ ] Query DSL [[#6](https://github.com/slunghq/slung/issues/6)]
