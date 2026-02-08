@@ -142,7 +142,7 @@ pub const AlternateHashFn = struct {
     }
 };
 
-test "bloom" {
+test "Bloom" {
     var bloom = Bloom(100, DefaultHashFn).init();
     defer bloom.deinit();
 
@@ -155,7 +155,7 @@ test "bloom" {
     try testing.expect(bloom.len() == 100);
 }
 
-test "bloom multi hash" {
+test "Bloom multi hash" {
     var bloom = BloomMultiHash(100, &.{ DefaultHashFn, AlternateHashFn }).init();
     defer bloom.deinit();
 

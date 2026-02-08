@@ -173,7 +173,7 @@ pub fn compareI64(a: i64, b: i64) std.math.Order {
     return std.math.order(a, b);
 }
 
-test "skip list" {
+test "SkipList" {
     const allocator = std.testing.allocator;
 
     var skip_list = try SkipList([]const u8, []const u8, 16, std.Random.Pcg, compare).init(allocator, @intCast(std.time.microTimestamp()));
@@ -188,7 +188,7 @@ test "skip list" {
     try testing.expectEqualStrings("value", skip_list.search("key").?.value);
 }
 
-test "skip list delete" {
+test "SkipList delete" {
     const allocator = std.testing.allocator;
 
     var skip_list = try SkipList(u64, u64, 16, std.Random.Pcg, compareU64).init(allocator, @intCast(std.time.microTimestamp()));
