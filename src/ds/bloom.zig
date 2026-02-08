@@ -55,6 +55,11 @@ fn BloomImpl(comptime size: usize, comptime HashFn: type) type {
         pub fn len(self: *Self) usize {
             return self.mask.len();
         }
+
+        /// Reset the bloom filter (clear all bits).
+        pub fn reset(self: *Self) void {
+            @memset(&self.mask.bits, 0);
+        }
     };
 }
 

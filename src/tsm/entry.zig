@@ -236,6 +236,7 @@ fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncodin
                     if (column_id == 0) {
                         const owned_key = try allocator.dupe(u8, series.key_ptr.*);
                         try entry.index_series.put(owned_key, .{ page_start_row, row_id - 1 });
+                        entry.bloom.insert(series.key_ptr.*);
                     }
 
                     page_id += 1;
@@ -513,6 +514,10 @@ fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncodin
             @memset(entry.cached_page_descriptors, null);
 
             return entry;
+        }
+
+        pub fn mayContainSeries(self: *Self, series_key: []const u8) bool {
+            return self.bloom.mayContain(series_key);
         }
 
         pub fn getColumn(self: *Self, column_name: []const u8) ![]Value {

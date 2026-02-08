@@ -4,6 +4,8 @@ const ds = @import("../ds/ds.zig");
 const Allocator = std.mem.Allocator;
 const HashMap = std.StringArrayHashMap;
 const Skiplist = ds.skiplist.SkipList;
+const Bloom = ds.bloom.Bloom;
+const Hasher = ds.bloom.DefaultHashFn;
 const entry_mod = @import("entry.zig");
 const DiskEntry = entry_mod.DiskEntry;
 const TimestampEncoding = entry_mod.TimestampEncoding;
@@ -14,6 +16,7 @@ fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) t
 
         allocator: Allocator,
         index_series: HashMap(Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64)),
+        bloom: Bloom(1024, Hasher),
         count: u64 = 0,
 
         pub const DataPoint = struct {
@@ -41,6 +44,7 @@ fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) t
             return Self{
                 .allocator = allocator,
                 .index_series = HashMap(Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64)).init(allocator),
+                .bloom = Bloom(1024, Hasher).init(),
             };
         }
 
@@ -51,6 +55,7 @@ fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) t
                 self.allocator.free(kv.key_ptr.*);
             }
             self.index_series.deinit();
+            self.bloom.deinit();
         }
 
         pub fn insert(self: *Self, series_key: []const u8, data_point: DataPoint) !void {
@@ -60,9 +65,14 @@ fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) t
                 series.key_ptr.* = owned_key;
                 const skiplist = try Skiplist(i64, Value, 16, std.Random.Pcg, ds.skiplist.compareI64).init(self.allocator, @intCast(std.time.microTimestamp()));
                 series.value_ptr.* = skiplist;
+                self.bloom.insert(series_key);
             }
             _ = try series.value_ptr.*.insert(data_point.timestamp, data_point.value);
             self.count += 1;
+        }
+
+        pub fn mayContainSeries(self: *Self, series_key: []const u8) bool {
+            return self.bloom.contains(series_key);
         }
 
         pub fn get(self: *Self, series_key: []const u8, timestamp: i64) ?Value {
@@ -72,6 +82,10 @@ fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) t
         }
 
         pub fn getRange(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64) ![]Value {
+            if (!self.bloom.contains(series_key)) {
+                return error.SeriesNotFound;
+            }
+
             const skiplist = self.index_series.get(series_key) orelse return error.SeriesNotFound;
 
             var values: std.ArrayList(Value) = .empty;

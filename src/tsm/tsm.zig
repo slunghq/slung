@@ -58,6 +58,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
                 self.allocator.free(kv.key_ptr.*);
             }
             self.cache.index_series.clearRetainingCapacity();
+            self.cache.bloom.reset();
             self.cache.count = 0;
         }
 
@@ -93,6 +94,10 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
                 const en = self.entries[en_id];
 
                 if (en.metadata.max_timestamp < timestamp_start or en.metadata.min_timestamp > timestamp_end) {
+                    continue;
+                }
+
+                if (!en.mayContainSeries(series_key)) {
                     continue;
                 }
 
