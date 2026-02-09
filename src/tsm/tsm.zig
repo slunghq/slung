@@ -1,41 +1,37 @@
 const std = @import("std");
 const testing = std.testing;
-const table = @import("table.zig");
 const cache = @import("cache.zig");
 const entry = @import("entry.zig");
 const Allocator = std.mem.Allocator;
 const Cache = cache.Cache;
-const ColumnTable = table.ColumnTable;
 const DiskEntry = entry.DiskEntry;
+pub const TimestampEncoding = entry.TimestampEncoding;
 
-pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
+pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts_encoding: TimestampEncoding) type {
     return struct {
         const Self = @This();
-        const MAX_CACHE_POINTS = 10_000_000;
+        const MAX_CACHE_POINTS = 1_000_000;
+        pub const timestamp_encoding = ts_encoding;
 
         allocator: Allocator,
         name: []const u8,
-        entries: []*DiskEntry(page_size),
+        entries: []*DiskEntry(page_size, ts_encoding),
         entries_count: u64 = 0,
-        cache: *Cache(page_size),
-        table: *ColumnTable(page_size),
+        cache: *Cache(page_size, ts_encoding),
 
         pub const queryOp = enum { AVG, MIN, MAX, SUM, COUNT };
 
-        pub const DataPoint = Cache(page_size).DataPoint;
-        pub const Value = ColumnTable(page_size).Value;
+        pub const DataPoint = Cache(page_size, ts_encoding).DataPoint;
+        pub const Value = Cache(page_size, ts_encoding).Value;
 
         pub fn init(allocator: Allocator, name: []const u8) !Self {
-            // we're ignoring tags for now
-            const column_names = [_][]const u8{ "time", "series_key", "value" };
-            const cache_ptr = try allocator.create(Cache(page_size));
-            cache_ptr.* = Cache(page_size).init(allocator);
+            const cache_ptr = try allocator.create(Cache(page_size, ts_encoding));
+            cache_ptr.* = Cache(page_size, ts_encoding).init(allocator);
             return Self{
                 .allocator = allocator,
                 .name = try allocator.dupe(u8, name),
-                .entries = try allocator.alloc(*DiskEntry(page_size), max_level),
+                .entries = try allocator.alloc(*DiskEntry(page_size, ts_encoding), max_level),
                 .cache = cache_ptr,
-                .table = try ColumnTable(page_size).init(allocator, &column_names),
             };
         }
 
@@ -43,7 +39,6 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
             for (0..self.entries_count) |i| {
                 self.entries[i].deinit();
             }
-            self.table.deinit();
             self.cache.deinit();
             self.allocator.destroy(self.cache);
             self.allocator.free(self.entries);
@@ -51,16 +46,19 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
         }
 
         pub fn flush(self: *Self) !void {
-            const d_entry = try self.cache.snapshot(self.name, self.entries_count + 1, self.table);
-            if (d_entry) |en| {
-                self.entries[self.entries_count] = en;
-                self.entries_count += 1;
-            }
+            if (self.cache.count == 0) return;
+
+            const d_entry = try self.cache.flush(self.name, self.entries_count + 1);
+            self.entries[self.entries_count] = d_entry;
+            self.entries_count += 1;
+
             var iter = self.cache.index_series.iterator();
             while (iter.next()) |kv| {
                 kv.value_ptr.deinit();
+                self.allocator.free(kv.key_ptr.*);
             }
             self.cache.index_series.clearRetainingCapacity();
+            self.cache.bloom.reset();
             self.cache.count = 0;
         }
 
@@ -85,21 +83,6 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
             return try self.cache.getRange(series_key, timestamp_start, timestamp_end);
         }
 
-        fn queryTable(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64) ![]Value {
-            const series_ids = self.table.index_series.get(series_key) orelse return error.InvalidSeries;
-            const time_values = try self.table.getColumnRange("time", series_ids[0], series_ids[1]);
-            defer self.allocator.free(time_values);
-
-            var timestamp_ids: [2]?u64 = .{ null, null };
-            for (time_values, series_ids[0]..series_ids[1] + 1) |time, time_id| {
-                if (time.Int >= timestamp_start and time.Int <= timestamp_end) {
-                    if (timestamp_ids[0] == null or time_id < timestamp_ids[0].?) timestamp_ids[0] = @intCast(time_id);
-                    if (timestamp_ids[1] == null or time_id > timestamp_ids[1].?) timestamp_ids[1] = @intCast(time_id);
-                }
-            }
-            return try self.table.getColumnRange("value", timestamp_ids[0].?, timestamp_ids[1].?);
-        }
-
         fn queryDisk(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64) ![]Value {
             if (self.entries_count == 0) {
                 return &[_]Value{};
@@ -109,6 +92,15 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
 
             for (0..self.entries_count) |en_id| {
                 const en = self.entries[en_id];
+
+                if (en.metadata.max_timestamp < timestamp_start or en.metadata.min_timestamp > timestamp_end) {
+                    continue;
+                }
+
+                if (!en.mayContainSeries(series_key)) {
+                    continue;
+                }
+
                 const series_ids = en.index_series.get(series_key) orelse continue;
                 const time_values = try en.getColumnRange("time", series_ids[0], series_ids[1]);
                 defer self.allocator.free(time_values);
@@ -130,14 +122,12 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
         }
 
         pub fn query(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64, op: queryOp) !Value {
-            const values_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const values_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(values_cache);
-            const values_table = self.queryTable(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
-            defer self.allocator.free(values_table);
-            const values_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const values_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(values_disk);
 
-            const values = try std.mem.concat(self.allocator, Value, &.{ values_cache, values_table, values_disk });
+            const values = try std.mem.concat(self.allocator, Value, &.{ values_cache, values_disk });
             defer self.allocator.free(values);
 
             return switch (op) {
@@ -178,114 +168,79 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32) type {
         }
 
         pub fn queryRaw(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64) ![]Value {
-            const value_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const value_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(value_cache);
-            const value_table = self.queryTable(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
-            defer self.allocator.free(value_table);
-            const value_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const value_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(value_disk);
 
-            return try std.mem.concat(self.allocator, Value, &.{ value_cache, value_table, value_disk });
+            return try std.mem.concat(self.allocator, Value, &.{ value_cache, value_disk });
         }
 
         pub fn queryLatest(self: *Self, series_key: []const u8) !DataPoint {
             var datapoint = DataPoint{ .timestamp = 0, .value = Value{ .Float = 0.0 } };
-            const blk = blk: {
-                blk1: {
-                    if (blkn: {
-                        const skiplist = self.cache.index_series.get(series_key) orelse break :blk1;
-                        break :blkn skiplist.last_inserted;
-                    }) |node| {
-                        datapoint.timestamp = node.key;
-                        datapoint.value = node.value;
-                        return datapoint;
-                    }
+
+            if (self.cache.index_series.get(series_key)) |skiplist| {
+                if (skiplist.last_inserted) |node| {
+                    datapoint.timestamp = node.key;
+                    datapoint.value = node.value;
+                    return datapoint;
                 }
-                blk2: {
-                    if (self.table.metadata.number_rows > 0) {
-                        const series_ids = self.table.index_series.get(series_key) orelse break :blk2;
-                        const time = self.table.getByRow("time", series_ids[1]) catch break :blk2;
-                        const value = self.table.getByRow("value", series_ids[1]) catch break :blk2;
+            }
 
-                        datapoint.timestamp = time.Int;
-                        datapoint.value = value;
-                        return datapoint;
-                    }
+            if (self.entries_count > 0) {
+                const en = self.entries[self.entries_count - 1];
+                if (en.index_series.get(series_key)) |series_ids| {
+                    const time = en.getColumnRange("time", series_ids[0], series_ids[1]) catch return error.EmptyTree;
+                    defer self.allocator.free(time);
+                    const value = en.getColumnRange("value", series_ids[0], series_ids[1]) catch return error.EmptyTree;
+                    defer self.allocator.free(value);
+                    datapoint.timestamp = time[time.len - 1].Int;
+                    datapoint.value = value[value.len - 1];
+                    return datapoint;
                 }
-                blk3: {
-                    if (self.entries_count > 0 and self.entries[0].metadata.number_rows > 0) {
-                        const en = self.entries[0];
-                        const series_ids = self.entries[0].index_series.get(series_key) orelse break :blk3;
-                        const time = en.getColumnRange("time", series_ids[0], series_ids[1]) catch break :blk3;
-                        const value = en.getColumnRange("value", series_ids[0], series_ids[1]) catch break :blk3;
+            }
 
-                        datapoint.timestamp = time[time.len - 1].Int;
-                        datapoint.value = value[value.len - 1];
-                        return datapoint;
-                    }
-                }
-
-                break :blk error.EmptyTree;
-            };
-
-            return blk;
+            return error.EmptyTree;
         }
 
         pub fn queryFirst(self: *Self, series_key: []const u8) !DataPoint {
             var datapoint = DataPoint{ .timestamp = 0, .value = Value{ .Float = 0.0 } };
-            const blk = blk: {
-                if (self.entries_count > 0) {
-                    for (0..self.entries_count) |entry_id| {
-                        const en = self.entries[entry_id];
-                        if (en.metadata.number_rows > 0) {
-                            const series_ids = en.index_series.get(series_key) orelse continue;
-                            const time = en.getColumnRange("time", series_ids[0], series_ids[1]) catch continue;
-                            defer self.allocator.free(time);
-                            const value = en.getColumnRange("value", series_ids[0], series_ids[1]) catch continue;
-                            defer self.allocator.free(value);
 
-                            datapoint.timestamp = time[0].Int;
-                            datapoint.value = value[0];
-                            return datapoint;
-                        }
-                    }
+            for (0..self.entries_count) |entry_id| {
+                const en = self.entries[entry_id];
+                if (en.metadata.number_rows > 0) {
+                    const series_ids = en.index_series.get(series_key) orelse continue;
+                    const time = en.getColumnRange("time", series_ids[0], series_ids[1]) catch continue;
+                    defer self.allocator.free(time);
+                    const value = en.getColumnRange("value", series_ids[0], series_ids[1]) catch continue;
+                    defer self.allocator.free(value);
+                    datapoint.timestamp = time[0].Int;
+                    datapoint.value = value[0];
+                    return datapoint;
                 }
-                blk1: {
-                    if (self.table.metadata.number_rows > 0) {
-                        const series_ids = self.table.index_series.get(series_key) orelse break :blk1;
-                        const time = self.table.getByRow("time", series_ids[0]) catch break :blk1;
-                        const value = self.table.getByRow("value", series_ids[0]) catch break :blk1;
+            }
 
-                        datapoint.timestamp = time.Int;
-                        datapoint.value = value;
-                        return datapoint;
-                    }
-                }
-                blk2: {
-                    const skiplist = self.cache.index_series.get(series_key) orelse break :blk2;
-                    const first_node = skiplist.head.next() orelse break :blk2;
-
+            if (self.cache.index_series.get(series_key)) |skiplist| {
+                if (skiplist.head.next()) |first_node| {
                     datapoint.timestamp = first_node.key;
                     datapoint.value = first_node.value;
                     return datapoint;
                 }
+            }
 
-                break :blk error.EmptyTree;
-            };
-            return blk;
+            return error.EmptyTree;
         }
     };
 }
 
-const TsmTree = TsmTreeImpl(10, 4096);
+const TsmTree = TsmTreeImpl(10, 4096, .gorilla);
 
 test {
-    _ = table;
     _ = cache;
     _ = entry;
 }
 
-test "tsm tree init and deinit" {
+test "TsmTree init and deinit" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_tree");
     defer tsm.deinit();
@@ -294,7 +249,7 @@ test "tsm tree init and deinit" {
     try testing.expectEqual(@as(u64, 0), tsm.entries_count);
 }
 
-test "tsm tree insert single data point" {
+test "TsmTree insert single data point" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_insert");
     defer tsm.deinit();
@@ -313,7 +268,7 @@ test "tsm tree insert single data point" {
     try testing.expectEqual(@as(f64, 42.5), result.?.Float);
 }
 
-test "tsm tree insert multiple data points" {
+test "TsmTree insert multiple data points" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_insert_bulk");
     defer tsm.deinit();
@@ -336,7 +291,7 @@ test "tsm tree insert multiple data points" {
     try testing.expectEqual(@as(f64, 30.0), result3.?.Float);
 }
 
-test "tsm tree insert multiple series" {
+test "TsmTree insert multiple series" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_multi_series");
     defer tsm.deinit();
@@ -352,7 +307,7 @@ test "tsm tree insert multiple series" {
     try testing.expectEqual(@as(f64, 300.0), tsm.cache.get("sensor3", timestamp).?.Float);
 }
 
-test "tsm tree queryLatest from cache" {
+test "TsmTree queryLatest from cache" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_query_latest");
     defer tsm.deinit();
@@ -370,7 +325,7 @@ test "tsm tree queryLatest from cache" {
     try testing.expectEqual(@as(f64, 30.0), latest.value.Float);
 }
 
-test "tsm tree queryLatest empty tree returns error" {
+test "TsmTree queryLatest empty tree returns error" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_empty");
     defer tsm.deinit();
@@ -379,7 +334,7 @@ test "tsm tree queryLatest empty tree returns error" {
     try testing.expectError(error.EmptyTree, result);
 }
 
-test "tsm tree query aggregations from cache" {
+test "TsmTree query aggregations from cache" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_aggregations");
     defer tsm.deinit();
@@ -412,7 +367,7 @@ test "tsm tree query aggregations from cache" {
     try testing.expectEqual(@as(f64, 40.0), max_result.Float);
 }
 
-test "tsm tree queryRaw from cache" {
+test "TsmTree queryRaw from cache" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_query_raw");
     defer tsm.deinit();
@@ -432,7 +387,7 @@ test "tsm tree queryRaw from cache" {
     try testing.expectEqual(@as(f64, 30.0), values[2].Float);
 }
 
-test "tsm tree query partial range" {
+test "TsmTree query partial range" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_partial_range");
     defer tsm.deinit();
@@ -453,7 +408,7 @@ test "tsm tree query partial range" {
     try testing.expectEqual(@as(f64, 30.0), values[1].Float);
 }
 
-test "tsm tree query nonexistent series returns empty" {
+test "TsmTree query nonexistent series returns empty" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_nonexistent");
     defer tsm.deinit();
@@ -466,7 +421,7 @@ test "tsm tree query nonexistent series returns empty" {
     try testing.expectEqual(@as(f64, 0.0), count_result.Float);
 }
 
-test "tsm tree insertBulk" {
+test "TsmTree insertBulk" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_bulk");
     defer tsm.deinit();
@@ -483,7 +438,7 @@ test "tsm tree insertBulk" {
     try testing.expectEqual(@as(f64, 30.0), tsm.cache.get("sensor1", 3000).?.Float);
 }
 
-test "tsm tree queryFirst from cache" {
+test "TsmTree queryFirst from cache" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_query_first");
     defer tsm.deinit();
@@ -503,7 +458,7 @@ test "tsm tree queryFirst from cache" {
     try testing.expectEqual(@as(f64, 10.0), first.value.Float);
 }
 
-test "tsm tree query with Int values" {
+test "TsmTree query with Int values" {
     const allocator = testing.allocator;
     var tsm = try TsmTree.init(allocator, "test_int_values");
     defer tsm.deinit();
@@ -515,56 +470,48 @@ test "tsm tree query with Int values" {
     try testing.expectEqual(@as(i64, 100), result.?.Int);
 }
 
-test "tsm tree query across disk table and cache with multiple flushes" {
+test "TsmTree query across disk and cache with single flush" {
     const allocator = testing.allocator;
-    var tsm = try TsmTree.init(allocator, "test_multi_flush");
-    defer {
-        tsm.deinit();
-    }
+    var tsm = try TsmTree.init(allocator, "test_single_flush");
+    defer tsm.deinit();
 
-    // phase 1: insert data that will end up on disk after two flushes
+    // phase 1: insert data that will end up on disk after flush
     try tsm.insert("sensor1", TsmTree.DataPoint{ .timestamp = 1000, .value = TsmTree.Value{ .Float = 10.0 } });
     try tsm.insert("sensor1", TsmTree.DataPoint{ .timestamp = 2000, .value = TsmTree.Value{ .Float = 20.0 } });
 
-    // first flush: moves cache -> table
+    // flush: moves cache -> disk
     try tsm.flush();
 
-    // phase 2: insert more data
+    // phase 2: insert data that stays in cache
     try tsm.insert("sensor1", TsmTree.DataPoint{ .timestamp = 3000, .value = TsmTree.Value{ .Float = 30.0 } });
     try tsm.insert("sensor1", TsmTree.DataPoint{ .timestamp = 4000, .value = TsmTree.Value{ .Float = 40.0 } });
 
-    // second flush: moves table -> disk (first disk entry), cache -> table
-    try tsm.flush();
+    // verify cache has the new data
+    try testing.expect(tsm.cache.get("sensor1", 3000) != null);
+    try testing.expect(tsm.cache.get("sensor1", 4000) != null);
 
-    // phase 3: insert data that stays in cache
-    try tsm.insert("sensor1", TsmTree.DataPoint{ .timestamp = 5000, .value = TsmTree.Value{ .Float = 50.0 } });
-    try tsm.insert("sensor1", TsmTree.DataPoint{ .timestamp = 6000, .value = TsmTree.Value{ .Float = 60.0 } });
-
-    try testing.expect(tsm.cache.get("sensor1", 5000) != null);
-    try testing.expect(tsm.cache.get("sensor1", 6000) != null);
-
-    try testing.expect(tsm.table.metadata.number_rows > 0);
-
+    // verify we have disk entries
     try testing.expect(tsm.entries_count > 0);
 
-    const raw_values = try tsm.queryRaw("sensor1", 1000, 6000);
+    // query raw values across disk and cache
+    const raw_values = try tsm.queryRaw("sensor1", 1000, 4000);
     defer allocator.free(raw_values);
 
     try testing.expect(raw_values.len >= 2);
 
-    // test aggregation across all layers
-    const sum_result = try tsm.query("sensor1", 1000, 6000, .SUM);
-    // Sum should include values from all layers that are accessible
+    // test aggregation across disk and cache
+    const sum_result = try tsm.query("sensor1", 1000, 4000, .SUM);
     try testing.expect(sum_result.Float > 0);
 
-    const count_result = try tsm.query("sensor1", 1000, 6000, .COUNT);
+    const count_result = try tsm.query("sensor1", 1000, 4000, .COUNT);
     try testing.expect(count_result.Float >= 2);
 
     // queryLatest should return from cache (most recent)
     const latest = try tsm.queryLatest("sensor1");
-    try testing.expectEqual(@as(i64, 6000), latest.timestamp);
-    try testing.expectEqual(@as(f64, 60.0), latest.value.Float);
+    try testing.expectEqual(@as(i64, 4000), latest.timestamp);
+    try testing.expectEqual(@as(f64, 40.0), latest.value.Float);
 
+    // queryFirst should return from disk (earliest)
     const first = try tsm.queryFirst("sensor1");
     try testing.expectEqual(@as(i64, 1000), first.timestamp);
     try testing.expectEqual(@as(f64, 10.0), first.value.Float);

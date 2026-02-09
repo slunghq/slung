@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to Slung!
 
-We're early and are always open to new contributors. We adhere to the [Zed Industries Code of Conduct](https://zed.dev/code-of-conduct). LLM-written contributions are looked down upon, but we do not discriminate against it as long as there's clear evidence of the human touch. See [brainmade](https://brainmade.org/) to learn more.
+We're early and are always open to new contributors. We adhere to the [Zed Industries Code of Conduct](https://zed.dev/code-of-conduct). LLM-written contributions are heavily scrutinised, but we do not discriminate against it as long as there's clear evidence of care from a human put into it.
 
 ## Contributions
 
