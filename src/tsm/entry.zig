@@ -144,9 +144,8 @@ fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncodin
                 const page_desc_start = pos_index;
                 pos_index += num_series * (@sizeOf(u64) + @sizeOf(u32) + @sizeOf(u64) + @sizeOf(u64));
 
-                const needs_row_offsets = false; // Gorilla columns decode sequentially
                 const offset_offsets_row = pos_index;
-                if (needs_row_offsets) {
+                if (ts_encoding == .delta) {
                     try writer_index.interface.writeInt(u64, total_rows, .little);
                     pos_index += @sizeOf(u64);
                 } else {
@@ -517,7 +516,7 @@ fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncodin
         }
 
         pub fn mayContainSeries(self: *Self, series_key: []const u8) bool {
-            return self.bloom.mayContain(series_key);
+            return self.bloom.contains(series_key);
         }
 
         pub fn getColumn(self: *Self, column_name: []const u8) ![]Value {
@@ -527,7 +526,7 @@ fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncodin
 
         pub fn getColumnRange(self: *Self, column_name: []const u8, start_row: u64, end_row: u64) ![]Value {
             const column_id = self.index_column.get(column_name) orelse return error.ColumnNotFound;
-            return self.getColumnRangeById(null, @intCast(column_id), start_row, end_row);
+            return self.getColumnRangeById(@intCast(column_id), start_row, end_row);
         }
 
         pub fn getColumnById(self: *Self, column_id: u64) ![]Value {
@@ -579,9 +578,7 @@ fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncodin
             return values;
         }
 
-        pub fn getColumnRangeById(self: *Self, allocator_param: ?Allocator, column_id: usize, start_row: u64, end_row: u64) ![]Value {
-            const alloc = allocator_param orelse self.allocator;
-            _ = alloc;
+        pub fn getColumnRangeById(self: *Self, column_id: usize, start_row: u64, end_row: u64) ![]Value {
             if (column_id >= self.column_descriptors.len) return error.InvalidColumnId;
             if (end_row >= self.metadata.number_rows) return error.InvalidRange;
             if (start_row > end_row) return error.InvalidRange;

@@ -6,6 +6,7 @@
 //! Two main compression techniques:
 //! 1. Timestamps: Delta-of-delta encoding with variable bit-width
 //! 2. Floats: XOR-based compression exploiting temporal locality
+//! Disclaimer: this code was wholly LLM generated and reviewed by me. This seemed trivial and I'd not the time to read the Gorilla paper and implement it at the time of writing.
 
 const std = @import("std");
 const testing = std.testing;

@@ -122,9 +122,9 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
         }
 
         pub fn query(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64, op: queryOp) !Value {
-            const values_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const values_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(values_cache);
-            const values_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const values_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(values_disk);
 
             const values = try std.mem.concat(self.allocator, Value, &.{ values_cache, values_disk });
@@ -168,9 +168,9 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
         }
 
         pub fn queryRaw(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64) ![]Value {
-            const value_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const value_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(value_cache);
-            const value_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch &[_]Value{};
+            const value_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(value_disk);
 
             return try std.mem.concat(self.allocator, Value, &.{ value_cache, value_disk });
@@ -233,7 +233,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
     };
 }
 
-const TsmTree = TsmTreeImpl(10, 4096, .delta);
+const TsmTree = TsmTreeImpl(10, 4096, .gorilla);
 
 test {
     _ = cache;
