@@ -14,6 +14,19 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const zio = b.dependency("zio", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const dusty = b.dependency("dusty", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("zio", zio.module("zio"));
+    exe.root_module.addImport("dusty", dusty.module("dusty"));
+
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
