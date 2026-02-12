@@ -3,7 +3,7 @@
 //! Skip list is a probabilistic data structure that allows efficient insertion, deletion, and search operations.
 //! It is a sorted linked list with a random number of levels, where each level is a subset of the previous level.
 //! The probability of a node having a higher level is determined by a random number generator giving it a chance of having a O(log n) search time.
-//! Inspired by [Rakator](https://github.com/Ratakor/skip/blob/master/skiplist.zig)
+//! Credit: [Rakator](https://github.com/Ratakor/skip/blob/master/skiplist.zig)
 
 const std = @import("std");
 const testing = std.testing;

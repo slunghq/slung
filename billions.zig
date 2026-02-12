@@ -6,7 +6,7 @@ const TsmTree = tsm.TsmTreeImpl(1000, 4096, .gorilla);
 pub fn main() !void {
     std.debug.print("Starting billions benchmark...\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}).init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -19,7 +19,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
         entries_count: u64 = 0,
         cache: *Cache(page_size, ts_encoding),
 
-        pub const queryOp = enum { AVG, MIN, MAX, SUM, COUNT };
+        pub const QueryOp = enum { AVG, MIN, MAX, SUM, COUNT };
 
         pub const DataPoint = Cache(page_size, ts_encoding).DataPoint;
         pub const Value = Cache(page_size, ts_encoding).Value;
@@ -121,7 +121,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
             return values_list.toOwnedSlice(self.allocator);
         }
 
-        pub fn query(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64, op: queryOp) !Value {
+        pub fn query(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64, op: QueryOp) !Value {
             const values_cache = self.queryCache(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
             defer self.allocator.free(values_cache);
             const values_disk = self.queryDisk(series_key, timestamp_start, timestamp_end) catch try self.allocator.alloc(Value, 0);
