@@ -165,7 +165,10 @@ pub fn spawnWasm(_: std.mem.Allocator, context: *AppContext) !void {
                 var websocket_iter = context.server.connections.iterator();
                 while (websocket_iter.next()) |entry| {
                     const websocket = entry.value_ptr.*;
-                    if (entry.key_ptr.* != value.id) try websocket.send(.text, value.data);
+                    websocket.send(.text, value.data) catch |send_err| {
+                        std.log.warn("Failed to send to connection {}: {}", .{entry.key_ptr.*, send_err});
+                        continue;
+                    };
                 }
             },
         }
