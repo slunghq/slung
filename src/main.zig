@@ -25,7 +25,7 @@ const Server = struct {
 
     const ChannelData = struct {
         /// to be used as id if not streamed with data
-        id: []const u8,
+        id: u64,
         data: []const u8,
     };
     const Connections = AutoHashMap(u64, *http.WebSocket);
@@ -65,7 +65,7 @@ const Server = struct {
 
 fn handleMessage(msg: http.WebSocket.Message, id: u64, context: *AppContext) !void {
     const message = Server.ChannelData{
-        .id = try std.fmt.allocPrint(context.io.allocator, "{d}", .{id}),
+        .id = id,
         .data = msg.data,
     };
     context.server.channel.send(message) catch |err| switch (err) {
@@ -165,8 +165,7 @@ pub fn spawnWasm(_: std.mem.Allocator, context: *AppContext) !void {
                 var websocket_iter = context.server.connections.iterator();
                 while (websocket_iter.next()) |entry| {
                     const websocket = entry.value_ptr.*;
-                    const id = try std.fmt.allocPrint(context.io.allocator, "{d}", .{entry.key_ptr.*});
-                    if (!std.mem.eql(u8, id, value.id)) try websocket.send(.text, value.data);
+                    if (entry.key_ptr.* != value.id) try websocket.send(.text, value.data);
                 }
             },
         }
