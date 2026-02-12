@@ -21,7 +21,7 @@
 ## Roadmap
 |  #  | Objective                                                                    | Status |
 | :-: | ---------------------------------------------------------------------------- | :----: |
-|  1  | Stream pipeline [[#1](https://github.com/slunghq/slung/issues/1)]            |   📅   |
+|  1  | Stream pipeline [[#1](https://github.com/slunghq/slung/issues/1)]            |   ⚠️   |
 |  2  | TSM tree [[#2](https://github.com/slunghq/slung/issues/2)]                   |   ✅   |
 |  3  | Parallel data query engine [[#3](https://github.com/slunghq/slung/issues/3)] |   📅   |
 |  4  | Wasm execution                                                               |   📅   |
@@ -34,9 +34,9 @@
 + 🚫 Deferred: Not currently in scope for the current milestone.
 
 ### Stream pipeline
-+ [ ] Non-blocking websocket channel [[#4](https://github.com/slunghq/slung/issues/4)]
-+ [ ] Stream rx/tx pool manager [[#5](https://github.com/slunghq/slung/issues/5)]
-+ [ ] Multi-threaded networking (config)
++ [x] Non-blocking websocket channel [[#4](https://github.com/slunghq/slung/issues/4)]
++ [x] Stream rx/tx pool manager [[#5](https://github.com/slunghq/slung/issues/5)]
++ [ ] Multi-threaded networking (config). Note: this is implicitly supported.
 
 ### TSM tree
 + [x] Cache (Skip list)
