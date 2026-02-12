@@ -1,6 +1,6 @@
 <h1>
 <p align="center">
-  <img src="./assets/logo.png" alt="Logo" width="128">
+  <img src="./docs/assets/logo.png" alt="Logo" width="128">
   <br>Slung
 </h1>
   <p align="center">
@@ -43,7 +43,7 @@
 + [x] Disk entry
 + [x] AMQ Filter (Bloom filter)
 + [x] Encoding (Gorilla/delta)
-+ [ ] Compaction
++ [ ] Multi-level compaction
 
 Optimisation: ReleaseFast. i5-10210U. SAMSUNG MZVLB256HAHQ-000H1:
 
