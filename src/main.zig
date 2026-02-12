@@ -21,7 +21,6 @@ const Server = struct {
     connections: Connections,
     connections_mutex: std.Thread.Mutex,
     next_connection_id: std.atomic.Value(u64),
-    active_connections: u64,
     channel: *Channel(ChannelData),
 
     const ChannelData = struct {
@@ -39,14 +38,12 @@ const Server = struct {
             .connections = Connections.init(context.io.allocator),
             .connections_mutex = .{},
             .next_connection_id = std.atomic.Value(u64).init(1),
-            .active_connections = 0,
             .channel = channel,
         };
     }
 
     pub fn deinit(self: *Server) void {
         self.connections.deinit();
-        self.active_connections = 0;
     }
 
     pub fn addConnection(self: *Server, websocket: *http.WebSocket) !u64 {
@@ -66,6 +63,23 @@ const Server = struct {
     }
 };
 
+fn handleMessage(msg: http.WebSocket.Message, id: u64, context: *AppContext) !void {
+    const message = Server.ChannelData{
+        .id = try std.fmt.allocPrint(context.io.allocator, "{d}", .{id}),
+        .data = msg.data,
+    };
+    context.server.channel.send(message) catch |err| switch (err) {
+        error.ChannelClosed => {
+            std.log.debug("Producer {}: channel closed, exiting", .{id});
+            return;
+        },
+        error.Canceled => {
+            std.log.debug("Producer {}: canceled, exiting", .{id});
+            return;
+        },
+    };
+}
+
 fn handleWebSocket(context: *AppContext, req: *http.Request, res: *http.Response) !void {
     var websocket = try res.upgradeWebSocket(req) orelse {
         try handleIndexPost(context, req, res);
@@ -76,8 +90,6 @@ fn handleWebSocket(context: *AppContext, req: *http.Request, res: *http.Response
     errdefer context.server.removeConnection(id);
     defer context.server.removeConnection(id);
 
-    // TODO: rid off inactive connections
-
     while (true) {
         const msg = websocket.receive() catch |err| switch (err) {
             error.EndOfStream => break,
@@ -86,40 +98,13 @@ fn handleWebSocket(context: *AppContext, req: *http.Request, res: *http.Response
 
         switch (msg.type) {
             .text => {
-                const message = Server.ChannelData{
-                    .id = &std.mem.toBytes(id),
-                    .data = msg.data,
-                };
-                context.server.channel.send(message) catch |err| switch (err) {
-                    error.ChannelClosed => {
-                        std.log.debug("Producer {}: channel closed, exiting", .{id});
-                        return;
-                    },
-                    error.Canceled => {
-                        std.log.debug("Producer {}: canceled, exiting", .{id});
-                        return;
-                    },
-                };
+                handleMessage(msg, id, context) catch return;
             },
             .binary => {
-                const message = Server.ChannelData{
-                    .id = &std.mem.toBytes(id),
-                    .data = msg.data,
-                };
-                context.server.channel.send(message) catch |err| switch (err) {
-                    error.ChannelClosed => {
-                        std.log.debug("Producer {}: channel closed, exiting", .{id});
-                        return;
-                    },
-                    error.Canceled => {
-                        std.log.debug("Producer {}: canceled, exiting", .{id});
-                        return;
-                    },
-                };
+                handleMessage(msg, id, context) catch return;
             },
             .close => {
                 std.log.info("Client closed connection", .{});
-                context.server.removeConnection(id);
                 break;
             },
             else => {},
@@ -128,7 +113,7 @@ fn handleWebSocket(context: *AppContext, req: *http.Request, res: *http.Response
 }
 
 fn handleHealth(_: *AppContext, _: *http.Request, res: *http.Response) !void {
-    try res.header("Content-Type", "text/json");
+    try res.header("Content-Type", "application/json");
     res.body =
         \\{
         \\ "status": "ok",
@@ -137,7 +122,7 @@ fn handleHealth(_: *AppContext, _: *http.Request, res: *http.Response) !void {
 }
 
 fn handleIndexPost(_: *AppContext, _: *http.Request, res: *http.Response) !void {
-    try res.header("Content-Type", "text/json");
+    try res.header("Content-Type", "application/json");
     res.status = .bad_request;
     res.body =
         \\{
@@ -173,10 +158,14 @@ pub fn spawnWasm(_: std.mem.Allocator, context: *AppContext) !void {
             .recv => |val| {
                 const value = try val;
                 std.log.debug("data: {s}", .{value.data});
+
+                context.server.connections_mutex.lock();
+                defer context.server.connections_mutex.unlock();
+
                 var websocket_iter = context.server.connections.iterator();
                 while (websocket_iter.next()) |entry| {
                     const websocket = entry.value_ptr.*;
-                    const id = &std.mem.toBytes(entry.key_ptr.*);
+                    const id = try std.fmt.allocPrint(context.io.allocator, "{d}", .{entry.key_ptr.*});
                     if (!std.mem.eql(u8, id, value.id)) try websocket.send(.text, value.data);
                 }
             },
@@ -200,10 +189,7 @@ pub fn main() !void {
         .server = undefined,
     };
 
-    var buffer: ArrayList(Server.ChannelData) = .empty;
-    defer buffer.deinit(allocator);
-
-    var channel = Channel(Server.ChannelData).init(try buffer.toOwnedSlice(allocator));
+    var channel = Channel(Server.ChannelData).init(&[_]Server.ChannelData{});
 
     var server = try Server.init(&context, &channel);
     context.server = &server;
