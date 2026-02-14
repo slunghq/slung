@@ -41,6 +41,10 @@
             .url = "git+https://github.com/lalinsky/dusty#483d020572e9ebcc2ae53a2a972cbd15cb022a34",
             .hash = "dusty-0.0.0-Qdw7RmevCQAQSX6XeNxQgpiWMw8Nj48L17ENBhLde_uw",
         },
+        .zware = .{
+            .url = "git+https://github.com/slunghq/zware#7c505eda2f03fac21a856f4995b0363c230f76f1",
+            .hash = "zware-0.0.1-ZA7j6QwqBQA3LRAg37cZYusj_JRPY-rMAMOSQAOs_7Hh",
+        },
     },
     .paths = .{
         "build.zig",
