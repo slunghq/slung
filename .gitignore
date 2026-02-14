@@ -1,6 +1,8 @@
 # build outputs
 .zig-cache
 zig-out
+target
+Cargo.lock
 
 # misc
 .DS_Store
