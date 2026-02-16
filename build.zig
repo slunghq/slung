@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{},
         }),
+        .use_llvm = true,
     });
 
     const zio = b.dependency("zio", .{
