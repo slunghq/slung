@@ -48,29 +48,28 @@ pub const Query = struct {
     };
 
     op: PollState,
-    series: [MAX_SERIES][]const u8,
+    series: []const u8,
     series_len: usize,
     tags: [MAX_TAG_TOKENS]TagToken,
     tags_len: usize,
-    time_start: ?i64,
-    time_end: ?i64,
+    time_start: i64,
+    time_end: i64,
 
     pub fn init(filter: []const u8) !Self {
         var query = Self{
             .op = parseOp(filter),
-            .series = undefined,
+            .series = "",
             .series_len = 0,
             .tags = undefined,
             .tags_len = 0,
-            .time_start = null,
-            .time_end = null,
+            .time_start = 0,
+            .time_end = 0,
         };
 
         var iter_parts = std.mem.splitScalar(u8, filter, ':');
         _ = iter_parts.next() orelse return error.InvalidQuery;
 
-        const series_part = iter_parts.next() orelse return error.InvalidQuery;
-        query.series_len = try parseSeries(series_part, query.series[0..]);
+        query.series = iter_parts.next() orelse return error.InvalidQuery;
 
         const tags_part = iter_parts.next() orelse return error.InvalidQuery;
         query.tags_len = try parseTags(tags_part, query.tags[0..]);
@@ -108,32 +107,11 @@ pub const Query = struct {
         return self.tags[0..self.tags_len];
     }
 
-    pub fn seriesSlice(self: *const Self) []const []const u8 {
-        return self.series[0..self.series_len];
-    }
-
     fn parseTagOp(token: []const u8) ?TagOp {
         if (std.ascii.eqlIgnoreCase(token, "AND")) return .and_op;
         if (std.ascii.eqlIgnoreCase(token, "OR")) return .or_op;
         if (std.ascii.eqlIgnoreCase(token, "NOT")) return .not_op;
         return null;
-    }
-
-    fn parseSeries(series_part: []const u8, out: []([]const u8)) error{ InvalidSeries, TooManySeries }!usize {
-        var iter = std.mem.splitScalar(u8, series_part, ',');
-        var out_len: usize = 0;
-
-        while (iter.next()) |raw| {
-            const series = std.mem.trim(u8, raw, " \t\r\n");
-            if (series.len == 0) continue;
-            if (out_len >= out.len) return error.TooManySeries;
-
-            out[out_len] = series;
-            out_len += 1;
-        }
-
-        if (out_len == 0) return error.InvalidSeries;
-        return out_len;
     }
 
     fn parseRange(range_part: []const u8) error{ InvalidRange, InvalidCharacter, Overflow }!Range {
@@ -298,10 +276,9 @@ test "parseTags rejects malformed tags" {
 test "Query.init parses full query" {
     const query = try Query.init("AVG:cpu.total:[region=us-west AND NOT host=test]:[1700000000,1700000100]");
 
-    try std.testing.expectEqual(@as(usize, 1), query.seriesSlice().len);
-    try std.testing.expectEqualStrings("cpu.total", query.seriesSlice()[0]);
-    try std.testing.expectEqual(@as(i64, 1700000000), query.time_start.?);
-    try std.testing.expectEqual(@as(i64, 1700000100), query.time_end.?);
+    try std.testing.expectEqualStrings("cpu.total", query.series);
+    try std.testing.expectEqual(@as(i64, 1700000000), query.time_start);
+    try std.testing.expectEqual(@as(i64, 1700000100), query.time_end);
 
     switch (query.op) {
         .Avg => |avg| {
@@ -317,16 +294,6 @@ test "Query.init parses full query" {
     try std.testing.expectEqual(Query.TagOp.and_op, tags[1].op);
     try std.testing.expectEqual(Query.TagOp.not_op, tags[2].op);
     try std.testing.expectEqualStrings("host=test", tags[3].tag);
-}
-
-test "Query.init parses multiple series and spaced range" {
-    const query = try Query.init("SUM:s1, s2:[enabled]:[ 1 , 2 ]");
-
-    try std.testing.expectEqual(@as(usize, 2), query.seriesSlice().len);
-    try std.testing.expectEqualStrings("s1", query.seriesSlice()[0]);
-    try std.testing.expectEqualStrings("s2", query.seriesSlice()[1]);
-    try std.testing.expectEqual(@as(i64, 1), query.time_start.?);
-    try std.testing.expectEqual(@as(i64, 2), query.time_end.?);
 }
 
 test "parseRange supports relative ranges and normalizes order" {
@@ -369,20 +336,19 @@ test "Query.init supports relative range in full query" {
     const query = try Query.init("SUM:s1:[enabled]:[1m,now]");
     const after = std.time.microTimestamp();
 
-    try std.testing.expect(query.time_start.? <= query.time_end.?);
-    try std.testing.expect(query.time_end.? >= before);
-    try std.testing.expect(query.time_end.? <= after);
+    try std.testing.expect(query.time_start <= query.time_end);
+    try std.testing.expect(query.time_end >= before);
+    try std.testing.expect(query.time_end <= after);
 }
 
 test "Query.init allows query without range" {
     const query = try Query.init("SUM:s1:[enabled]");
 
-    try std.testing.expectEqual(@as(usize, 1), query.seriesSlice().len);
-    try std.testing.expectEqualStrings("s1", query.seriesSlice()[0]);
+    try std.testing.expectEqualStrings("s1", query.series);
     try std.testing.expectEqual(@as(usize, 1), query.tagsSlice().len);
     try std.testing.expectEqualStrings("enabled", query.tagsSlice()[0].tag);
-    try std.testing.expectEqual(@as(?i64, null), query.time_start);
-    try std.testing.expectEqual(@as(?i64, null), query.time_end);
+    try std.testing.expectEqual(0, query.time_start);
+    try std.testing.expectEqual(0, query.time_end);
 }
 
 test "Query.init rejects malformed full query parts" {

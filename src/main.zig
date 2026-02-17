@@ -4,13 +4,16 @@ const http = @import("dusty");
 const testing = std.testing;
 const ds = @import("ds/ds.zig");
 const tsm = @import("tsm/tsm.zig");
+const query = @import("query.zig");
 const net = std.net;
+const execute = @import("host/execute.zig");
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const Channel = zio.Channel;
-const SkipList = ds.skiplist.SkipList;
+const Query = query.Query;
+const TsmTree = tsm.TsmTree;
 
-const AppContext = struct {
+pub const AppContext = struct {
     io: *zio.Runtime,
     server: *Server,
 };
@@ -18,10 +21,14 @@ const AppContext = struct {
 // rn we'll be making this single-instance
 // so we don't need to hold any extra server data
 const Server = struct {
+    const max_queries = 16;
     connections: Connections,
     connections_mutex: std.Thread.Mutex,
     next_connection_id: std.atomic.Value(u64),
     channel: *Channel(ChannelData),
+    queries: AutoHashMap(u32, Query),
+    next_query_id: std.atomic.Value(u32),
+    tree: *TsmTree,
 
     const ChannelData = struct {
         /// to be used as id if not streamed with data
@@ -33,17 +40,22 @@ const Server = struct {
     pub fn init(
         context: *AppContext,
         channel: *Channel(ChannelData),
+        tree: *TsmTree,
     ) !Server {
         return Server{
             .connections = Connections.init(context.io.allocator),
             .connections_mutex = .{},
             .next_connection_id = std.atomic.Value(u64).init(1),
             .channel = channel,
+            .queries = AutoHashMap(u32, Query).init(context.io.allocator),
+            .next_query_id = std.atomic.Value(u32).init(1),
+            .tree = tree,
         };
     }
 
     pub fn deinit(self: *Server) void {
         self.connections.deinit();
+        self.queries.deinit();
     }
 
     pub fn addConnection(self: *Server, websocket: *http.WebSocket) !u64 {
@@ -147,10 +159,21 @@ pub fn runServer(allocator: std.mem.Allocator, context: *AppContext) !void {
 }
 
 // TODO: handle Wasm
-pub fn spawnWasm(_: std.mem.Allocator, context: *AppContext) !void {
-    // this while loop will be run within the host functions via zio.spawn
-    // we have access to every websocket connection as well as a channel of their stream
-    // we use a channel over polling on the connections to prevent misbehaviour
+pub fn spawnWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
+    const bytes = @embedFile("basic.wasm");
+    const context_ptr = @intFromPtr(context);
+    _ = try zio.spawn(handleWasmWebsocket, .{ context, &context.server.queries });
+    try execute.spawn(allocator, bytes, context_ptr);
+}
+
+const Message = struct {
+    timestamp: i64,
+    value: f64,
+    series: []const u8,
+    id: u64,
+};
+
+fn handleWasmWebsocket(context: *AppContext, queries: *AutoHashMap(u32, Query)) !void {
     while (true) {
         var recv = context.server.channel.asyncReceive();
         const result = try zio.select(.{ .recv = &recv });
@@ -162,13 +185,28 @@ pub fn spawnWasm(_: std.mem.Allocator, context: *AppContext) !void {
                 context.server.connections_mutex.lock();
                 defer context.server.connections_mutex.unlock();
 
-                var websocket_iter = context.server.connections.iterator();
-                while (websocket_iter.next()) |entry| {
-                    const websocket = entry.value_ptr.*;
-                    websocket.send(.text, value.data) catch |send_err| {
-                        std.log.warn("Failed to send to connection {}: {}", .{entry.key_ptr.*, send_err});
-                        continue;
-                    };
+                var iter_queries = queries.valueIterator();
+                while (iter_queries.next()) |q| {
+                    const parsed_message = try std.json.parseFromSlice(Message, context.io.allocator, value.data, .{});
+                    defer parsed_message.deinit();
+                    const message = parsed_message.value;
+                    if (std.mem.eql(u8, message.series, q.series)) {
+                        switch (q.op) {
+                            .Avg => {
+                                q.*.op.Avg.count += 1;
+                                q.*.op.Avg.sum += message.value;
+                            },
+                            .Sum => {
+                                q.*.op.Sum += message.value;
+                            },
+                            .Count => {
+                                q.*.op.Count += 1;
+                            },
+                            .Max => {},
+                            .Min => {},
+                            .None => {},
+                        }
+                    }
                 }
             },
         }
@@ -193,7 +231,10 @@ pub fn main() !void {
 
     var channel = Channel(Server.ChannelData).init(&[_]Server.ChannelData{});
 
-    var server = try Server.init(&context, &channel);
+    var tree = try TsmTree.init(allocator, "demo");
+    defer tree.deinit();
+
+    var server = try Server.init(&context, &channel, &tree);
     context.server = &server;
     defer server.deinit();
 
@@ -206,4 +247,5 @@ pub fn main() !void {
 test {
     _ = ds;
     _ = tsm;
+    _ = query;
 }
