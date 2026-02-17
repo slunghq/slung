@@ -12,6 +12,7 @@ const AutoHashMap = std.AutoHashMap;
 const Channel = zio.Channel;
 const Query = query.Query;
 const TsmTree = tsm.TsmTree;
+const CHANNEL_CAPACITY = 8192 * 2;
 
 pub const AppContext = struct {
     io: *zio.Runtime,
@@ -22,11 +23,20 @@ pub const AppContext = struct {
 // so we don't need to hold any extra server data
 const Server = struct {
     const max_queries = 16;
+    const PendingEvent = struct {
+        timestamp: i64,
+        value: f64,
+        producer: u64,
+    };
+
+    allocator: std.mem.Allocator,
     connections: Connections,
     connections_mutex: std.Thread.Mutex,
     next_connection_id: std.atomic.Value(u64),
     channel: *Channel(ChannelData),
     queries: AutoHashMap(u32, Query),
+    query_events: AutoHashMap(u32, PendingEvent),
+    series_key_cache: std.StringArrayHashMap([]const u8),
     next_query_id: std.atomic.Value(u32),
     tree: *TsmTree,
 
@@ -43,19 +53,38 @@ const Server = struct {
         tree: *TsmTree,
     ) !Server {
         return Server{
+            .allocator = context.io.allocator,
             .connections = Connections.init(context.io.allocator),
             .connections_mutex = .{},
             .next_connection_id = std.atomic.Value(u64).init(1),
             .channel = channel,
             .queries = AutoHashMap(u32, Query).init(context.io.allocator),
+            .query_events = AutoHashMap(u32, PendingEvent).init(context.io.allocator),
+            .series_key_cache = std.StringArrayHashMap([]const u8).init(context.io.allocator),
             .next_query_id = std.atomic.Value(u32).init(1),
             .tree = tree,
         };
     }
 
     pub fn deinit(self: *Server) void {
+        var iter_series = self.series_key_cache.iterator();
+        while (iter_series.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.series_key_cache.deinit();
         self.connections.deinit();
         self.queries.deinit();
+        self.query_events.deinit();
+    }
+
+    pub fn internSeriesKey(self: *Server, key_bytes: []const u8) ![]const u8 {
+        const entry = try self.series_key_cache.getOrPut(key_bytes);
+        if (entry.found_existing) return entry.value_ptr.*;
+
+        const owned = try self.allocator.dupe(u8, key_bytes);
+        entry.key_ptr.* = owned;
+        entry.value_ptr.* = owned;
+        return owned;
     }
 
     pub fn addConnection(self: *Server, websocket: *http.WebSocket) !u64 {
@@ -158,11 +187,9 @@ pub fn runServer(allocator: std.mem.Allocator, context: *AppContext) !void {
     try server.listen(addr);
 }
 
-// TODO: handle Wasm
-pub fn spawnWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
+pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
     const bytes = @embedFile("basic.wasm");
     const context_ptr = @intFromPtr(context);
-    _ = try zio.spawn(handleWasmWebsocket, .{ context, &context.server.queries });
     try execute.spawn(allocator, bytes, context_ptr);
 }
 
@@ -170,44 +197,80 @@ const Message = struct {
     timestamp: i64,
     value: f64,
     series: []const u8,
-    id: u64,
+    tags: []const []const u8 = &.{},
 };
 
-fn handleWasmWebsocket(context: *AppContext, queries: *AutoHashMap(u32, Query)) !void {
+fn writeSeriesKey(out: *std.ArrayList(u8), allocator: std.mem.Allocator, series: []const u8, tags: []const []const u8) !void {
+    out.clearRetainingCapacity();
+    try out.appendSlice(allocator, series);
+    for (tags) |tag| {
+        if (tag.len == 0) continue;
+        try out.append(allocator, ',');
+        try out.appendSlice(allocator, tag);
+    }
+}
+
+fn handleWasmWebsocket(context: *AppContext) !void {
+    var parse_arena = std.heap.ArenaAllocator.init(context.io.allocator);
+    defer parse_arena.deinit();
+
+    var key_scratch = std.ArrayList(u8).empty;
+    defer key_scratch.deinit(context.io.allocator);
+
     while (true) {
         var recv = context.server.channel.asyncReceive();
         const result = try zio.select(.{ .recv = &recv });
         switch (result) {
             .recv => |val| {
                 const value = try val;
-                std.log.debug("data: {s}", .{value.data});
+                const parsed_message = std.json.parseFromSlice(Message, parse_arena.allocator(), value.data, .{}) catch |err| {
+                    std.log.warn("Ignoring websocket payload; expected JSON {{\"value\":...,\"timestamp\":...,\"series\":\"...\",\"tags\":[...]}}: {}", .{err});
+                    _ = parse_arena.reset(.retain_capacity);
+                    continue;
+                };
+                defer parsed_message.deinit();
+                const message = parsed_message.value;
+                try writeSeriesKey(&key_scratch, context.io.allocator, message.series, message.tags);
+                const series_key = try context.server.internSeriesKey(key_scratch.items);
+                try context.server.tree.insert(series_key, .{
+                    .timestamp = message.timestamp,
+                    .value = .{ .Float = message.value },
+                });
 
                 context.server.connections_mutex.lock();
                 defer context.server.connections_mutex.unlock();
 
-                var iter_queries = queries.valueIterator();
-                while (iter_queries.next()) |q| {
-                    const parsed_message = try std.json.parseFromSlice(Message, context.io.allocator, value.data, .{});
-                    defer parsed_message.deinit();
-                    const message = parsed_message.value;
-                    if (std.mem.eql(u8, message.series, q.series)) {
-                        switch (q.op) {
-                            .Avg => {
-                                q.*.op.Avg.count += 1;
-                                q.*.op.Avg.sum += message.value;
-                            },
-                            .Sum => {
-                                q.*.op.Sum += message.value;
-                            },
-                            .Count => {
-                                q.*.op.Count += 1;
-                            },
-                            .Max => {},
-                            .Min => {},
-                            .None => {},
-                        }
+                var iter_queries = context.server.queries.iterator();
+                while (iter_queries.next()) |entry| {
+                    const query_id = entry.key_ptr.*;
+                    const q = entry.value_ptr;
+                    if (!std.mem.eql(u8, q.series, message.series)) {
+                        continue;
                     }
+
+                    switch (q.op) {
+                        .Avg => {
+                            q.*.op.Avg.count += 1;
+                            q.*.op.Avg.sum += message.value;
+                        },
+                        .Sum => {
+                            q.*.op.Sum += message.value;
+                        },
+                        .Count => {
+                            q.*.op.Count += 1;
+                        },
+                        .Max => {},
+                        .Min => {},
+                        .None => {},
+                    }
+
+                    context.server.query_events.put(query_id, .{
+                        .timestamp = message.timestamp,
+                        .value = message.value,
+                        .producer = value.id,
+                    }) catch {};
                 }
+                _ = parse_arena.reset(.retain_capacity);
             },
         }
     }
@@ -229,7 +292,9 @@ pub fn main() !void {
         .server = undefined,
     };
 
-    var channel = Channel(Server.ChannelData).init(&[_]Server.ChannelData{});
+    const channel_buffer = try allocator.alloc(Server.ChannelData, CHANNEL_CAPACITY);
+    defer allocator.free(channel_buffer);
+    var channel = Channel(Server.ChannelData).init(channel_buffer[0..]);
 
     var tree = try TsmTree.init(allocator, "demo");
     defer tree.deinit();
@@ -238,7 +303,8 @@ pub fn main() !void {
     context.server = &server;
     defer server.deinit();
 
-    try group.spawn(spawnWasm, .{ allocator, &context });
+    try group.spawn(handleWasmWebsocket, .{&context});
+    try group.spawn(handleWasm, .{ allocator, &context });
     try group.spawn(runServer, .{ allocator, &context });
 
     try group.wait();

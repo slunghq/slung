@@ -233,7 +233,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
     };
 }
 
-pub const TsmTree = TsmTreeImpl(10, 4096, .gorilla);
+pub const TsmTree = TsmTreeImpl(100_000, 4096, .gorilla);
 
 test {
     _ = cache;

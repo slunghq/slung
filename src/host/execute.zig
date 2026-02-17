@@ -23,5 +23,9 @@ pub fn spawn(allocator: Allocator, bytes: []const u8, context_ptr: usize) !void 
     var input = [0]u64{};
     var output = [1]u64{0};
 
-    try instance.invoke("call", &input, &output, .{});
+    try instance.invoke("call", &input, &output, .{
+        .frame_stack_size = 4096,
+        .label_stack_size = 4096,
+        .operand_stack_size = 16384,
+    });
 }

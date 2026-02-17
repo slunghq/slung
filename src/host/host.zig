@@ -30,15 +30,17 @@ pub fn u_poll_handle(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmEr
     const handle = vm.popOperand(u32);
 
     context.server.connections_mutex.lock();
-    const state = if (context.server.queries.get(handle)) |query| query.op else null;
+    const event = context.server.query_events.fetchRemove(handle);
     context.server.connections_mutex.unlock();
 
-    if (state == null) {
+    if (event == null) {
+        // Allow other runtime tasks (websocket receiver) to make progress in single-thread mode.
+        zio.yield() catch {};
         try vm.pushOperand(u32, 0);
         return;
     }
 
-    const json_bytes = pollStateJson(context.io.allocator, state.?) catch {
+    const json_bytes = pollEventJson(context.io.allocator, event.?.value) catch {
         try vm.pushOperand(u32, 0);
         return;
     };
@@ -117,7 +119,13 @@ pub fn u_query_history(vm: *zware.VirtualMachine, context_ptr: usize) zware.Wasm
         },
     }
 
-    const value = context.server.tree.query(query.series, query.time_start, query.time_end, op) catch {
+    const series_key = buildQuerySeriesKey(context.io.allocator, &query) catch {
+        try vm.pushOperand(u64, 0);
+        return;
+    };
+    defer context.io.allocator.free(series_key);
+
+    const value = context.server.tree.query(series_key, query.time_start, query.time_end, op) catch {
         try vm.pushOperand(u64, 0);
         return;
     };
@@ -193,7 +201,13 @@ pub fn u_writeback_ws(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmE
     const data_bytes = try readRegion(memory, data_ptr);
 
     if (context.server.connections.get(producer)) |connection| {
-        connection.send(.text, data_bytes) catch return;
+        connection.send(.text, data_bytes) catch {
+            context.server.connections_mutex.lock();
+            defer context.server.connections_mutex.unlock();
+            _ = context.server.connections.remove(producer);
+            try vm.pushOperand(u32, 1);
+            return;
+        };
     } else {
         try vm.pushOperand(u32, 1);
         return;
@@ -221,19 +235,31 @@ pub const PollState = union(enum) {
     None: void,
 };
 
-fn pollStateJson(allocator: std.mem.Allocator, state: PollState) ![]u8 {
-    return switch (state) {
-        .Sum => |value| std.fmt.allocPrint(allocator, "{{\"Sum\":{d}}}", .{value}),
-        .Min => |value| std.fmt.allocPrint(allocator, "{{\"Min\":{d}}}", .{value}),
-        .Max => |value| std.fmt.allocPrint(allocator, "{{\"Max\":{d}}}", .{value}),
-        .Count => |value| std.fmt.allocPrint(allocator, "{{\"Count\":{}}}", .{value}),
-        .Avg => |value| std.fmt.allocPrint(
-            allocator,
-            "{{\"Avg\":{{\"sum\":{d},\"count\":{}}}}}",
-            .{ value.sum, value.count },
-        ),
-        .None => std.fmt.allocPrint(allocator, "null", .{}),
-    };
+fn buildQuerySeriesKey(allocator: std.mem.Allocator, query: *const Query) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+
+    try out.appendSlice(allocator, query.series);
+    for (query.tagsSlice()) |token| {
+        switch (token) {
+            .tag => |tag| {
+                if (tag.len == 0) continue;
+                try out.append(allocator, ',');
+                try out.appendSlice(allocator, tag);
+            },
+            .op => {},
+        }
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn pollEventJson(allocator: std.mem.Allocator, event: anytype) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"timestamp\":{},\"value\":{d},\"tags\":[],\"producers\":[{}]}}",
+        .{ event.timestamp, event.value, event.producer },
+    );
 }
 
 /// Helper to read a Region from guest memory and get the data slice
