@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zio = @import("zio");
 const http = @import("dusty");
 const testing = std.testing;
@@ -333,8 +334,14 @@ fn handleWasmWebsocket(context: *AppContext) !void {
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}).init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var buffer: [2 * 1024 * 1024 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = switch (builtin.mode) {
+        .Debug => gpa.allocator(),
+        .ReleaseSafe => gpa.allocator(),
+        .ReleaseFast => std.heap.smp_allocator,
+        .ReleaseSmall => fba.allocator(),
+    };
 
     var io = try zio.Runtime.init(allocator, .{});
     defer io.deinit();
