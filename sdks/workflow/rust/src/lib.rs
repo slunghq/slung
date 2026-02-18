@@ -27,7 +27,7 @@ pub struct Event {
     pub timestamp: i64,
     pub value: f64,
     pub tags: Vec<String>,
-    pub producers: Vec<String>,
+    pub producers: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,20 +54,11 @@ pub fn query_live(filter: &str) -> Result<QueryHandle> {
     Ok(handle)
 }
 
-pub fn query_history(filter: &str) -> Result<Option<Event>> {
+pub fn query_history(filter: &str) -> Result<f64> {
     let filter = Region::build(filter.as_bytes());
     let filter_ptr = &*filter as *const Region;
 
-    let data_ptr = unsafe { u_query_history(filter_ptr as usize) };
-
-    if data_ptr == 0 {
-        return Ok(None);
-    }
-
-    let data = unsafe { Region::consume(data_ptr as *mut Region) };
-    let event = serde_json::from_slice(&data)?;
-
-    Ok(Some(event))
+    Ok(unsafe { u_query_history(filter_ptr as usize) } as f64)
 }
 
 pub fn poll_handle<F, A>(handle: QueryHandle, callback: F, args: A) -> Result<()>
@@ -131,13 +122,11 @@ pub fn write_event(timestamp: i64, value: f64, tags: Vec<String>) -> Result<()> 
 }
 
 // --- Write backs ---
-pub fn writeback_ws(destination: &str, data: &str) -> Result<()> {
-    let destination = Region::build(destination.as_bytes());
-    let destination_ptr = &*destination as *const Region;
+pub fn writeback_ws(destination: u64, data: &str) -> Result<()> {
     let data = Region::build(data.as_bytes());
     let data_ptr = &*data as *const Region;
 
-    let result = unsafe { u_writeback_ws(destination_ptr as usize, data_ptr as usize) };
+    let result = unsafe { u_writeback_ws(destination as usize, data_ptr as usize) };
 
     if result == 0 {
         Ok(())
@@ -153,7 +142,11 @@ pub enum WritebackMethod {
     DELETE,
 }
 
-pub fn writeback_http(destination: &str, data: &str, method: WritebackMethod) -> Result<()> {
+pub fn writeback_http(
+    destination: &str,
+    data: &str,
+    method: WritebackMethod,
+) -> Result<Option<Vec<u8>>> {
     let destination = Region::build(destination.as_bytes());
     let destination_ptr = &*destination as *const Region;
     let data = Region::build(data.as_bytes());
@@ -169,9 +162,9 @@ pub fn writeback_http(destination: &str, data: &str, method: WritebackMethod) ->
         unsafe { u_writeback_http(destination_ptr as usize, data_ptr as usize, method as usize) };
 
     if result == 0 {
-        Ok(())
+        Ok(None)
     } else {
-        Err(std::io::Error::other("Failed to writeback to websocket"))
+        Ok(Some(unsafe { Region::consume(data_ptr as *mut Region) }))
     }
 }
 
@@ -181,4 +174,6 @@ pub mod prelude {
         free_handle, poll_handle, poll_handle_state, query_history, query_live, write_event,
         writeback_ws,
     };
+    pub use slung_macros::main;
+    pub use std::io::Result;
 }
