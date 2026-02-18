@@ -37,6 +37,8 @@ const Server = struct {
     queries: AutoHashMap(u32, Query),
     query_events: AutoHashMap(u32, PendingEvent),
     series_key_cache: std.StringArrayHashMap([]const u8),
+    series_key_by_hash: std.AutoHashMap(u64, []const u8),
+    series_key_hash_collisions: std.AutoHashMap(u64, void),
     next_query_id: std.atomic.Value(u32),
     tree: *TsmTree,
 
@@ -61,6 +63,8 @@ const Server = struct {
             .queries = AutoHashMap(u32, Query).init(context.io.allocator),
             .query_events = AutoHashMap(u32, PendingEvent).init(context.io.allocator),
             .series_key_cache = std.StringArrayHashMap([]const u8).init(context.io.allocator),
+            .series_key_by_hash = std.AutoHashMap(u64, []const u8).init(context.io.allocator),
+            .series_key_hash_collisions = std.AutoHashMap(u64, void).init(context.io.allocator),
             .next_query_id = std.atomic.Value(u32).init(1),
             .tree = tree,
         };
@@ -72,6 +76,8 @@ const Server = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.series_key_cache.deinit();
+        self.series_key_by_hash.deinit();
+        self.series_key_hash_collisions.deinit();
         self.connections.deinit();
         self.queries.deinit();
         self.query_events.deinit();
@@ -85,6 +91,25 @@ const Server = struct {
         entry.key_ptr.* = owned;
         entry.value_ptr.* = owned;
         return owned;
+    }
+
+    pub fn resolveSeriesKey(self: *Server, scratch: *std.ArrayList(u8), series: []const u8, tags: []const []const u8) ![]const u8 {
+        const h = hashSeriesAndTags(series, tags);
+        if (!self.series_key_hash_collisions.contains(h)) {
+            if (self.series_key_by_hash.get(h)) |existing_key| {
+                if (matchesSeriesAndTags(existing_key, series, tags)) {
+                    return existing_key;
+                }
+                try self.series_key_hash_collisions.put(h, {});
+            }
+        }
+
+        try writeSeriesKey(scratch, self.allocator, series, tags);
+        const key = try self.internSeriesKey(scratch.items);
+        if (!self.series_key_hash_collisions.contains(h)) {
+            try self.series_key_by_hash.put(h, key);
+        }
+        return key;
     }
 
     pub fn addConnection(self: *Server, websocket: *http.WebSocket) !u64 {
@@ -210,6 +235,37 @@ fn writeSeriesKey(out: *std.ArrayList(u8), allocator: std.mem.Allocator, series:
     }
 }
 
+fn hashSeriesAndTags(series: []const u8, tags: []const []const u8) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    const len_buf: [8]u8 = std.mem.toBytes(@as(u64, @intCast(series.len)));
+    hasher.update(&len_buf);
+    hasher.update(series);
+    for (tags) |tag| {
+        const tag_len_buf: [8]u8 = std.mem.toBytes(@as(u64, @intCast(tag.len)));
+        hasher.update(&tag_len_buf);
+        hasher.update(tag);
+    }
+    return hasher.final();
+}
+
+fn matchesSeriesAndTags(key: []const u8, series: []const u8, tags: []const []const u8) bool {
+    var offset: usize = 0;
+    if (key.len < series.len) return false;
+    if (!std.mem.eql(u8, key[0..series.len], series)) return false;
+    offset = series.len;
+
+    for (tags) |tag| {
+        if (tag.len == 0) continue;
+        if (offset >= key.len or key[offset] != ',') return false;
+        offset += 1;
+        if (offset + tag.len > key.len) return false;
+        if (!std.mem.eql(u8, key[offset .. offset + tag.len], tag)) return false;
+        offset += tag.len;
+    }
+
+    return offset == key.len;
+}
+
 fn handleWasmWebsocket(context: *AppContext) !void {
     var parse_arena = std.heap.ArenaAllocator.init(context.io.allocator);
     defer parse_arena.deinit();
@@ -230,8 +286,7 @@ fn handleWasmWebsocket(context: *AppContext) !void {
                 };
                 defer parsed_message.deinit();
                 const message = parsed_message.value;
-                try writeSeriesKey(&key_scratch, context.io.allocator, message.series, message.tags);
-                const series_key = try context.server.internSeriesKey(key_scratch.items);
+                const series_key = try context.server.resolveSeriesKey(&key_scratch, message.series, message.tags);
                 try context.server.tree.insert(series_key, .{
                     .timestamp = message.timestamp,
                     .value = .{ .Float = message.value },
