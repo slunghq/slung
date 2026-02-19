@@ -1,0 +1,25 @@
+{
+  "name": "@slunghq/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript client SDK for sending events to Slung over WebSocket",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "example:simulated": "tsx examples/simulated.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.11",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

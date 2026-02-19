@@ -1,16 +1,21 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const zio = @import("zio");
 const http = @import("dusty");
 const testing = std.testing;
 const ds = @import("ds/ds.zig");
 const tsm = @import("tsm/tsm.zig");
+const query = @import("query.zig");
 const net = std.net;
+const execute = @import("host/execute.zig");
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const Channel = zio.Channel;
-const SkipList = ds.skiplist.SkipList;
+const Query = query.Query;
+const TsmTree = tsm.TsmTree;
+const CHANNEL_CAPACITY = 8192 * 2;
 
-const AppContext = struct {
+pub const AppContext = struct {
     io: *zio.Runtime,
     server: *Server,
 };
@@ -18,10 +23,25 @@ const AppContext = struct {
 // rn we'll be making this single-instance
 // so we don't need to hold any extra server data
 const Server = struct {
+    const max_queries = 16;
+    const PendingEvent = struct {
+        timestamp: i64,
+        value: f64,
+        producer: u64,
+    };
+
+    allocator: std.mem.Allocator,
     connections: Connections,
     connections_mutex: std.Thread.Mutex,
     next_connection_id: std.atomic.Value(u64),
     channel: *Channel(ChannelData),
+    queries: AutoHashMap(u32, Query),
+    query_events: AutoHashMap(u32, PendingEvent),
+    series_key_cache: std.StringArrayHashMap([]const u8),
+    series_key_by_hash: std.AutoHashMap(u64, []const u8),
+    series_key_hash_collisions: std.AutoHashMap(u64, void),
+    next_query_id: std.atomic.Value(u32),
+    tree: *TsmTree,
 
     const ChannelData = struct {
         /// to be used as id if not streamed with data
@@ -33,17 +53,64 @@ const Server = struct {
     pub fn init(
         context: *AppContext,
         channel: *Channel(ChannelData),
+        tree: *TsmTree,
     ) !Server {
         return Server{
+            .allocator = context.io.allocator,
             .connections = Connections.init(context.io.allocator),
             .connections_mutex = .{},
             .next_connection_id = std.atomic.Value(u64).init(1),
             .channel = channel,
+            .queries = AutoHashMap(u32, Query).init(context.io.allocator),
+            .query_events = AutoHashMap(u32, PendingEvent).init(context.io.allocator),
+            .series_key_cache = std.StringArrayHashMap([]const u8).init(context.io.allocator),
+            .series_key_by_hash = std.AutoHashMap(u64, []const u8).init(context.io.allocator),
+            .series_key_hash_collisions = std.AutoHashMap(u64, void).init(context.io.allocator),
+            .next_query_id = std.atomic.Value(u32).init(1),
+            .tree = tree,
         };
     }
 
     pub fn deinit(self: *Server) void {
+        var iter_series = self.series_key_cache.iterator();
+        while (iter_series.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.series_key_cache.deinit();
+        self.series_key_by_hash.deinit();
+        self.series_key_hash_collisions.deinit();
         self.connections.deinit();
+        self.queries.deinit();
+        self.query_events.deinit();
+    }
+
+    pub fn internSeriesKey(self: *Server, key_bytes: []const u8) ![]const u8 {
+        const entry = try self.series_key_cache.getOrPut(key_bytes);
+        if (entry.found_existing) return entry.value_ptr.*;
+
+        const owned = try self.allocator.dupe(u8, key_bytes);
+        entry.key_ptr.* = owned;
+        entry.value_ptr.* = owned;
+        return owned;
+    }
+
+    pub fn resolveSeriesKey(self: *Server, scratch: *std.ArrayList(u8), series: []const u8, tags: []const []const u8) ![]const u8 {
+        const h = hashSeriesAndTags(series, tags);
+        if (!self.series_key_hash_collisions.contains(h)) {
+            if (self.series_key_by_hash.get(h)) |existing_key| {
+                if (matchesSeriesAndTags(existing_key, series, tags)) {
+                    return existing_key;
+                }
+                try self.series_key_hash_collisions.put(h, {});
+            }
+        }
+
+        try writeSeriesKey(scratch, self.allocator, series, tags);
+        const key = try self.internSeriesKey(scratch.items);
+        if (!self.series_key_hash_collisions.contains(h)) {
+            try self.series_key_by_hash.put(h, key);
+        }
+        return key;
     }
 
     pub fn addConnection(self: *Server, websocket: *http.WebSocket) !u64 {
@@ -127,7 +194,7 @@ fn handleIndexPost(_: *AppContext, _: *http.Request, res: *http.Response) !void 
     res.body =
         \\{
         \\ "status": "ok",
-        \\ "info": "use websocket to stream data!"
+        \\ "info": "use websocket binary frames to stream data"
         \\}
     ;
 }
@@ -146,29 +213,165 @@ pub fn runServer(allocator: std.mem.Allocator, context: *AppContext) !void {
     try server.listen(addr);
 }
 
-// TODO: handle Wasm
-pub fn spawnWasm(_: std.mem.Allocator, context: *AppContext) !void {
-    // this while loop will be run within the host functions via zio.spawn
-    // we have access to every websocket connection as well as a channel of their stream
-    // we use a channel over polling on the connections to prevent misbehaviour
+pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
+    const bytes = @embedFile("basic.wasm");
+    const context_ptr = @intFromPtr(context);
+    try execute.spawn(allocator, bytes, context_ptr);
+}
+
+const DecodedMessage = struct {
+    timestamp: i64,
+    value: f64,
+    series: []const u8,
+    tags: []const []const u8,
+};
+
+fn decodeBinaryMessage(allocator: std.mem.Allocator, data: []const u8, tag_scratch: *std.ArrayList([]const u8)) !DecodedMessage {
+    // little-endian:
+    // [timestamp:i64][value:f64][series_len:u16][tag_count:u16][series][tag_len:u16+tag_bytes]...
+    const header_len = 8 + 8 + 2 + 2;
+    if (data.len < header_len) return error.InvalidMessage;
+
+    var offset: usize = 0;
+    const timestamp_bits = std.mem.readInt(u64, data[offset..][0..8], .little);
+    const timestamp: i64 = @bitCast(timestamp_bits);
+    offset += 8;
+
+    const value_bits = std.mem.readInt(u64, data[offset..][0..8], .little);
+    const value: f64 = @bitCast(value_bits);
+    offset += 8;
+
+    const series_len = @as(usize, std.mem.readInt(u16, data[offset..][0..2], .little));
+    offset += 2;
+    const tag_count = @as(usize, std.mem.readInt(u16, data[offset..][0..2], .little));
+    offset += 2;
+
+    if (offset + series_len > data.len) return error.InvalidMessage;
+    const series = data[offset .. offset + series_len];
+    offset += series_len;
+
+    tag_scratch.clearRetainingCapacity();
+    try tag_scratch.ensureTotalCapacity(allocator, tag_count);
+
+    var i: usize = 0;
+    while (i < tag_count) : (i += 1) {
+        if (offset + 2 > data.len) return error.InvalidMessage;
+        const tag_len = @as(usize, std.mem.readInt(u16, data[offset..][0..2], .little));
+        offset += 2;
+        if (offset + tag_len > data.len) return error.InvalidMessage;
+        try tag_scratch.append(allocator, data[offset .. offset + tag_len]);
+        offset += tag_len;
+    }
+
+    if (offset != data.len) return error.InvalidMessage;
+
+    return .{
+        .timestamp = timestamp,
+        .value = value,
+        .series = series,
+        .tags = tag_scratch.items,
+    };
+}
+
+fn writeSeriesKey(out: *std.ArrayList(u8), allocator: std.mem.Allocator, series: []const u8, tags: []const []const u8) !void {
+    out.clearRetainingCapacity();
+    try out.appendSlice(allocator, series);
+    for (tags) |tag| {
+        if (tag.len == 0) continue;
+        try out.append(allocator, ',');
+        try out.appendSlice(allocator, tag);
+    }
+}
+
+fn hashSeriesAndTags(series: []const u8, tags: []const []const u8) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    const len_buf: [8]u8 = std.mem.toBytes(@as(u64, @intCast(series.len)));
+    hasher.update(&len_buf);
+    hasher.update(series);
+    for (tags) |tag| {
+        const tag_len_buf: [8]u8 = std.mem.toBytes(@as(u64, @intCast(tag.len)));
+        hasher.update(&tag_len_buf);
+        hasher.update(tag);
+    }
+    return hasher.final();
+}
+
+fn matchesSeriesAndTags(key: []const u8, series: []const u8, tags: []const []const u8) bool {
+    var offset: usize = 0;
+    if (key.len < series.len) return false;
+    if (!std.mem.eql(u8, key[0..series.len], series)) return false;
+    offset = series.len;
+
+    for (tags) |tag| {
+        if (tag.len == 0) continue;
+        if (offset >= key.len or key[offset] != ',') return false;
+        offset += 1;
+        if (offset + tag.len > key.len) return false;
+        if (!std.mem.eql(u8, key[offset .. offset + tag.len], tag)) return false;
+        offset += tag.len;
+    }
+
+    return offset == key.len;
+}
+
+fn handleWasmWebsocket(context: *AppContext) !void {
+    var key_scratch = std.ArrayList(u8).empty;
+    defer key_scratch.deinit(context.io.allocator);
+    var tag_scratch: std.ArrayList([]const u8) = .empty;
+    defer tag_scratch.deinit(context.io.allocator);
+
     while (true) {
         var recv = context.server.channel.asyncReceive();
         const result = try zio.select(.{ .recv = &recv });
         switch (result) {
             .recv => |val| {
                 const value = try val;
-                std.log.debug("data: {s}", .{value.data});
+                const message = decodeBinaryMessage(context.io.allocator, value.data, &tag_scratch) catch |err| {
+                    std.log.warn("Ignoring websocket payload; expected binary [i64 timestamp][f64 value][u16 series_len][u16 tag_count][series][tags...]: {}", .{err});
+                    continue;
+                };
+                const series_key = try context.server.resolveSeriesKey(&key_scratch, message.series, message.tags);
+                try context.server.tree.insert(series_key, .{
+                    .timestamp = message.timestamp,
+                    .value = .{ .Float = message.value },
+                });
 
                 context.server.connections_mutex.lock();
                 defer context.server.connections_mutex.unlock();
 
-                var websocket_iter = context.server.connections.iterator();
-                while (websocket_iter.next()) |entry| {
-                    const websocket = entry.value_ptr.*;
-                    websocket.send(.text, value.data) catch |send_err| {
-                        std.log.warn("Failed to send to connection {}: {}", .{entry.key_ptr.*, send_err});
+                var iter_queries = context.server.queries.iterator();
+                while (iter_queries.next()) |entry| {
+                    const query_id = entry.key_ptr.*;
+                    const q = entry.value_ptr;
+                    if (!std.mem.eql(u8, q.series, message.series)) {
                         continue;
-                    };
+                    }
+
+                    switch (q.op) {
+                        .Avg => {
+                            q.*.op.Avg.count += 1;
+                            q.*.op.Avg.sum += message.value;
+                        },
+                        .Sum => {
+                            q.*.op.Sum += message.value;
+                        },
+                        .Count => {
+                            q.*.op.Count += 1;
+                        },
+                        .Max => {
+                            if (message.value > q.*.op.Max) q.*.op.Max = message.value;
+                        },
+                        .Min => {
+                            if (message.value < q.*.op.Min) q.*.op.Min = message.value;
+                        },
+                        .None => continue,
+                    }
+
+                    context.server.query_events.put(query_id, .{
+                        .timestamp = message.timestamp,
+                        .value = message.value,
+                        .producer = value.id,
+                    }) catch {};
                 }
             },
         }
@@ -177,8 +380,12 @@ pub fn spawnWasm(_: std.mem.Allocator, context: *AppContext) !void {
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}).init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var buffer: [2 * 1024 * 1024 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = switch (builtin.mode) {
+        .ReleaseSmall => fba.allocator(),
+        else => gpa.allocator(),
+    };
 
     var io = try zio.Runtime.init(allocator, .{});
     defer io.deinit();
@@ -191,13 +398,19 @@ pub fn main() !void {
         .server = undefined,
     };
 
-    var channel = Channel(Server.ChannelData).init(&[_]Server.ChannelData{});
+    const channel_buffer = try allocator.alloc(Server.ChannelData, CHANNEL_CAPACITY);
+    defer allocator.free(channel_buffer);
+    var channel = Channel(Server.ChannelData).init(channel_buffer[0..]);
 
-    var server = try Server.init(&context, &channel);
+    var tree = try TsmTree.init(allocator, "demo");
+    defer tree.deinit();
+
+    var server = try Server.init(&context, &channel, &tree);
     context.server = &server;
     defer server.deinit();
 
-    try group.spawn(spawnWasm, .{ allocator, &context });
+    try group.spawn(handleWasmWebsocket, .{&context});
+    try group.spawn(handleWasm, .{ allocator, &context });
     try group.spawn(runServer, .{ allocator, &context });
 
     try group.wait();
@@ -206,4 +419,5 @@ pub fn main() !void {
 test {
     _ = ds;
     _ = tsm;
+    _ = query;
 }

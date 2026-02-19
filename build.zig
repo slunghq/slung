@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{},
         }),
+        .use_llvm = true,
     });
 
     const zio = b.dependency("zio", .{
@@ -24,8 +25,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zware = b.dependency("zware", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     exe.root_module.addImport("zio", zio.module("zio"));
     exe.root_module.addImport("dusty", dusty.module("dusty"));
+    exe.root_module.addImport("zware", zware.module("zware"));
 
     b.installArtifact(exe);
 
