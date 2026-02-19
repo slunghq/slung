@@ -212,8 +212,12 @@ pub fn u_write_event(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmEr
             .Count => {
                 q.*.op.Count += 1;
             },
-            .Max => {},
-            .Min => {},
+            .Max => {
+                if (value > q.*.op.Max) q.*.op.Max = value;
+            },
+            .Min => {
+                if (value < q.*.op.Min) q.*.op.Min = value;
+            },
             .None => {},
         }
 
