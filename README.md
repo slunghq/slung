@@ -25,7 +25,7 @@
 |  2  | TSM tree [[#2](https://github.com/slunghq/slung/issues/2)]                   |   ✅   |
 |  3  | Parallel data query engine [[#3](https://github.com/slunghq/slung/issues/3)] |   ⚠️   |
 |  4  | Wasm execution                                                               |   ✅   |
-|  5  | Gateway                                                                      |   🚫   |
+|  5  | Gateway                                                                      |   📅   |
 |  6  | Write-ahead log (WAL)                                                        |   🚫   |
 |  7  | WebTransport                                                                 |   🚫   |
 
@@ -37,7 +37,7 @@
 ### Stream pipeline
 + [x] Non-blocking websocket channel [[#4](https://github.com/slunghq/slung/issues/4)]
 + [x] Stream rx/tx pool manager [[#5](https://github.com/slunghq/slung/issues/5)]
-+ [ ] More streaming primitives (WebTransport, NATS, Kafka)
++ [ ] More streaming primitives (WebTransport, NATS, Kafka). Via Gateway
 + [ ] Multi-threaded networking (config). Note: this is implicitly supported.
 
 ### TSM tree
