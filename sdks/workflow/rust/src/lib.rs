@@ -8,16 +8,16 @@ use std::io::Result;
 pub mod region;
 
 unsafe extern "C" {
-    fn u_query_live(filter_ptr: usize) -> usize;
-    fn u_query_history(filter_ptr: usize) -> usize;
+    fn u_query_live(filter_ptr: usize) -> u64;
+    fn u_query_history(filter_ptr: usize) -> f64;
 
-    fn u_poll_handle(handle_ptr: usize) -> usize;
-    fn u_free_handle(handle_ptr: usize) -> usize;
+    fn u_poll_handle(handle_ptr: u64) -> usize;
+    fn u_free_handle(handle_ptr: u64) -> u32;
 
-    fn u_write_event(timestamp_ptr: usize, value_ptr: usize, tags_ptr: usize) -> usize;
+    fn u_write_event(timestamp_ptr: usize, value_ptr: usize, tags_ptr: usize) -> u32;
 
-    fn u_writeback_ws(producer_ptr: usize, data_ptr: usize) -> usize;
-    fn u_writeback_http(url_ptr: usize, data_ptr: usize, method_ptr: usize) -> usize;
+    fn u_writeback_ws(producer_ptr: u64, data_ptr: usize) -> u32;
+    fn u_writeback_http(url_ptr: usize, data_ptr: usize, method_ptr: u32) -> usize;
 }
 
 pub type QueryHandle = u64;
@@ -59,7 +59,7 @@ pub fn query_history(filter: &str) -> Result<f64> {
     let filter = Region::build(filter.as_bytes());
     let filter_ptr = &*filter as *const Region;
 
-    Ok(unsafe { u_query_history(filter_ptr as usize) } as f64)
+    Ok(unsafe { u_query_history(filter_ptr as usize) })
 }
 
 pub fn poll_handle<F, A>(handle: QueryHandle, callback: F, args: A) -> Result<()>
@@ -68,7 +68,7 @@ where
     A: Clone,
 {
     loop {
-        let data_ptr = unsafe { u_poll_handle(handle as usize) };
+        let data_ptr = unsafe { u_poll_handle(handle) };
 
         if data_ptr == 0 {
             continue;
@@ -82,7 +82,7 @@ where
 }
 
 pub fn poll_handle_state(handle: QueryHandle) -> Result<Option<PollState>> {
-    let data_ptr = unsafe { u_poll_handle(handle as usize) };
+    let data_ptr = unsafe { u_poll_handle(handle) };
 
     if data_ptr == 0 {
         return Ok(None);
@@ -95,7 +95,7 @@ pub fn poll_handle_state(handle: QueryHandle) -> Result<Option<PollState>> {
 }
 
 pub fn free_handle(handle: QueryHandle) -> Result<()> {
-    let result = unsafe { u_free_handle(handle as usize) };
+    let result = unsafe { u_free_handle(handle) };
 
     if result == 0 {
         Ok(())
@@ -116,13 +116,14 @@ pub fn unix_micros() -> i64 {
 }
 
 pub fn write_event(timestamp: i64, value: f64, tags: Vec<String>) -> Result<()> {
+    let timestamp = Region::build(timestamp.to_string().as_bytes());
+    let timestamp_ptr = &*timestamp as *const Region;
     let value = Region::build(value.to_string().as_bytes());
     let value_ptr = &*value as *const Region;
     let tags = Region::build(tags.join(",").as_bytes());
     let tags_ptr = &*tags as *const Region;
 
-    let result =
-        unsafe { u_write_event(timestamp as usize, value_ptr as usize, tags_ptr as usize) };
+    let result = unsafe { u_write_event(timestamp_ptr as usize, value_ptr as usize, tags_ptr as usize) };
 
     if result == 0 {
         Ok(())
@@ -136,7 +137,7 @@ pub fn writeback_ws(destination: u64, data: &str) -> Result<()> {
     let data = Region::build(data.as_bytes());
     let data_ptr = &*data as *const Region;
 
-    let result = unsafe { u_writeback_ws(destination as usize, data_ptr as usize) };
+    let result = unsafe { u_writeback_ws(destination, data_ptr as usize) };
 
     if result == 0 {
         Ok(())
@@ -169,12 +170,12 @@ pub fn writeback_http(
     };
 
     let result =
-        unsafe { u_writeback_http(destination_ptr as usize, data_ptr as usize, method as usize) };
+        unsafe { u_writeback_http(destination_ptr as usize, data_ptr as usize, method as u32) };
 
     if result == 0 {
         Ok(None)
     } else {
-        Ok(Some(unsafe { Region::consume(data_ptr as *mut Region) }))
+        Ok(Some(unsafe { Region::consume(result as *mut Region) }))
     }
 }
 
