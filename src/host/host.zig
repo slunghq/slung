@@ -23,8 +23,6 @@ pub fn initHostFunctions(store: *zware.Store, context_ptr: usize) !void {
     try store.exposeHostFunction("wasi_snapshot_preview1", "proc_exit", zware.wasi.proc_exit, 0, &[_]zware.ValType{.I32}, &[_]zware.ValType{});
 }
 
-// unused usize is host context
-// we should be able to use it to hold a pointer to runtime state
 pub fn u_poll_handle(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmError!void {
     const context: *AppContext = @ptrFromInt(context_ptr);
     const handle = vm.popOperand(u32);
@@ -34,7 +32,6 @@ pub fn u_poll_handle(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmEr
     context.server.connections_mutex.unlock();
 
     if (event == null) {
-        // Allow other runtime tasks (websocket receiver) to make progress in single-thread mode.
         zio.yield() catch {};
         try vm.pushOperand(u32, 0);
         return;
@@ -58,11 +55,12 @@ pub fn u_poll_handle(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmEr
 
 pub fn u_free_handle(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmError!void {
     const context: *AppContext = @ptrFromInt(context_ptr);
-    _ = context;
-    const param0 = vm.popOperand(i32);
-    std.debug.print("Unimplemented: u_poll_handle({})\n", .{param0});
+    const handle = vm.popOperand(u32);
+    if (!context.server.queries.remove(handle)) {
+        try vm.pushOperand(u64, 1);
+        return;
+    }
     try vm.pushOperand(u64, 0);
-    @panic("Unimplemented: u_poll_handle");
 }
 
 pub fn u_query_live(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmError!void {
