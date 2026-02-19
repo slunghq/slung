@@ -214,13 +214,6 @@ pub fn u_writeback_ws(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmE
     try vm.pushOperand(u32, 0);
 }
 
-const Event = extern struct {
-    timetamp: i64,
-    value: f64,
-    tags: []const []const u8,
-    producers: []const []const u8,
-};
-
 pub const PollState = union(enum) {
     Sum: f64,
     Min: f64,
