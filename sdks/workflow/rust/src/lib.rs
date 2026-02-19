@@ -24,6 +24,7 @@ pub type QueryHandle = u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
+    /// Unix timestamp in microseconds.
     pub timestamp: i64,
     pub value: f64,
     pub tags: Vec<String>,
@@ -105,6 +106,15 @@ pub fn free_handle(handle: QueryHandle) -> Result<()> {
 }
 
 // --- Writing events ---
+/// Return current Unix epoch timestamp in microseconds.
+pub fn unix_micros() -> i64 {
+    let now = std::time::SystemTime::now();
+    let duration = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is before unix epoch");
+    i64::try_from(duration.as_micros()).expect("unix micros does not fit i64")
+}
+
 pub fn write_event(timestamp: i64, value: f64, tags: Vec<String>) -> Result<()> {
     let value = Region::build(value.to_string().as_bytes());
     let value_ptr = &*value as *const Region;
@@ -171,8 +181,8 @@ pub fn writeback_http(
 pub mod prelude {
     pub use crate::Event;
     pub use crate::{
-        free_handle, poll_handle, poll_handle_state, query_history, query_live, write_event,
-        writeback_ws,
+        free_handle, poll_handle, poll_handle_state, query_history, query_live, unix_micros,
+        write_event, writeback_ws,
     };
     pub use slung_macros::main;
     pub use std::io::Result;

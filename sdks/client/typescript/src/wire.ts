@@ -1,4 +1,5 @@
 export type WireEvent = {
+  // Unix timestamp in microseconds.
   timestamp: number;
   value: number;
   series: string;
@@ -97,4 +98,8 @@ export function decodeEventBinary(buf: Buffer): WireEvent | null {
 
   if (offset !== buf.length) return null;
   return { timestamp, value, series, tags };
+}
+
+export function nowUnixMicros(): number {
+  return Date.now() * 1000;
 }

@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { encodeEventBinary } from "./wire.js";
+import { encodeEventBinary, nowUnixMicros } from "./wire.js";
 
 export type SlungEvent = {
   value: number;
@@ -59,7 +59,7 @@ export class SlungClient {
       value += (Math.random() - 0.5) * jitter;
       this.sendEvent({
         value: Number(value.toFixed(3)),
-        timestamp: Date.now(),
+        timestamp: nowUnixMicros(),
         series,
         tags,
       });
@@ -75,4 +75,9 @@ export class SlungClient {
   }
 }
 
-export { createEventBinaryEncoder, decodeEventBinary, encodeEventBinary } from "./wire.js";
+export {
+  createEventBinaryEncoder,
+  decodeEventBinary,
+  encodeEventBinary,
+  nowUnixMicros,
+} from "./wire.js";

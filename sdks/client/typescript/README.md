@@ -10,6 +10,8 @@ The server expects binary websocket frames (little-endian):
 [timestamp:i64][value:f64][series_len:u16][tag_count:u16][series_utf8][tag_len:u16+tag_utf8]...
 ```
 
+`timestamp` is expected to be Unix epoch microseconds.
+
 ## Install deps
 
 ```bash

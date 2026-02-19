@@ -75,3 +75,6 @@ export function decodeEventBinary(buf) {
         return null;
     return { timestamp, value, series, tags };
 }
+export function nowUnixMicros() {
+    return Date.now() * 1000;
+}

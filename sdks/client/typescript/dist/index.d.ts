@@ -20,4 +20,4 @@ export declare class SlungClient {
     startSimulatedStream(options?: SimulatedStreamOptions): () => void;
     close(code?: number, reason?: string): void;
 }
-export { createEventBinaryEncoder, decodeEventBinary, encodeEventBinary } from "./wire.js";
+export { createEventBinaryEncoder, decodeEventBinary, encodeEventBinary, nowUnixMicros, } from "./wire.js";
