@@ -4,6 +4,7 @@ zig-out
 target
 Cargo.lock
 node_modules
+dist
 
 # misc
 .DS_Store
