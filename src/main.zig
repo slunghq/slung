@@ -194,7 +194,7 @@ fn handleIndexPost(_: *AppContext, _: *http.Request, res: *http.Response) !void 
     res.body =
         \\{
         \\ "status": "ok",
-        \\ "info": "use websocket to stream data!"
+        \\ "info": "use websocket binary frames to stream data"
         \\}
     ;
 }
@@ -219,12 +219,59 @@ pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
     try execute.spawn(allocator, bytes, context_ptr);
 }
 
-const Message = struct {
+const DecodedMessage = struct {
     timestamp: i64,
     value: f64,
     series: []const u8,
-    tags: []const []const u8 = &.{},
+    tags: []const []const u8,
 };
+
+fn decodeBinaryMessage(allocator: std.mem.Allocator, data: []const u8, tag_scratch: *std.ArrayList([]const u8)) !DecodedMessage {
+    // little-endian:
+    // [timestamp:i64][value:f64][series_len:u16][tag_count:u16][series][tag_len:u16+tag_bytes]...
+    const header_len = 8 + 8 + 2 + 2;
+    if (data.len < header_len) return error.InvalidMessage;
+
+    var offset: usize = 0;
+    const timestamp_bits = std.mem.readInt(u64, data[offset..][0..8], .little);
+    const timestamp: i64 = @bitCast(timestamp_bits);
+    offset += 8;
+
+    const value_bits = std.mem.readInt(u64, data[offset..][0..8], .little);
+    const value: f64 = @bitCast(value_bits);
+    offset += 8;
+
+    const series_len = @as(usize, std.mem.readInt(u16, data[offset..][0..2], .little));
+    offset += 2;
+    const tag_count = @as(usize, std.mem.readInt(u16, data[offset..][0..2], .little));
+    offset += 2;
+
+    if (offset + series_len > data.len) return error.InvalidMessage;
+    const series = data[offset .. offset + series_len];
+    offset += series_len;
+
+    tag_scratch.clearRetainingCapacity();
+    try tag_scratch.ensureTotalCapacity(allocator, tag_count);
+
+    var i: usize = 0;
+    while (i < tag_count) : (i += 1) {
+        if (offset + 2 > data.len) return error.InvalidMessage;
+        const tag_len = @as(usize, std.mem.readInt(u16, data[offset..][0..2], .little));
+        offset += 2;
+        if (offset + tag_len > data.len) return error.InvalidMessage;
+        try tag_scratch.append(allocator, data[offset .. offset + tag_len]);
+        offset += tag_len;
+    }
+
+    if (offset != data.len) return error.InvalidMessage;
+
+    return .{
+        .timestamp = timestamp,
+        .value = value,
+        .series = series,
+        .tags = tag_scratch.items,
+    };
+}
 
 fn writeSeriesKey(out: *std.ArrayList(u8), allocator: std.mem.Allocator, series: []const u8, tags: []const []const u8) !void {
     out.clearRetainingCapacity();
@@ -268,11 +315,10 @@ fn matchesSeriesAndTags(key: []const u8, series: []const u8, tags: []const []con
 }
 
 fn handleWasmWebsocket(context: *AppContext) !void {
-    var parse_arena = std.heap.ArenaAllocator.init(context.io.allocator);
-    defer parse_arena.deinit();
-
     var key_scratch = std.ArrayList(u8).empty;
     defer key_scratch.deinit(context.io.allocator);
+    var tag_scratch: std.ArrayList([]const u8) = .empty;
+    defer tag_scratch.deinit(context.io.allocator);
 
     while (true) {
         var recv = context.server.channel.asyncReceive();
@@ -280,13 +326,10 @@ fn handleWasmWebsocket(context: *AppContext) !void {
         switch (result) {
             .recv => |val| {
                 const value = try val;
-                const parsed_message = std.json.parseFromSlice(Message, parse_arena.allocator(), value.data, .{}) catch |err| {
-                    std.log.warn("Ignoring websocket payload; expected JSON {{\"value\":...,\"timestamp\":...,\"series\":\"...\",\"tags\":[...]}}: {}", .{err});
-                    _ = parse_arena.reset(.retain_capacity);
+                const message = decodeBinaryMessage(context.io.allocator, value.data, &tag_scratch) catch |err| {
+                    std.log.warn("Ignoring websocket payload; expected binary [i64 timestamp][f64 value][u16 series_len][u16 tag_count][series][tags...]: {}", .{err});
                     continue;
                 };
-                defer parsed_message.deinit();
-                const message = parsed_message.value;
                 const series_key = try context.server.resolveSeriesKey(&key_scratch, message.series, message.tags);
                 try context.server.tree.insert(series_key, .{
                     .timestamp = message.timestamp,
@@ -315,9 +358,13 @@ fn handleWasmWebsocket(context: *AppContext) !void {
                         .Count => {
                             q.*.op.Count += 1;
                         },
-                        .Max => {},
-                        .Min => {},
-                        .None => {},
+                        .Max => {
+                            if (message.value > q.*.op.Max) q.*.op.Max = message.value;
+                        },
+                        .Min => {
+                            if (message.value < q.*.op.Min) q.*.op.Min = message.value;
+                        },
+                        .None => continue,
                     }
 
                     context.server.query_events.put(query_id, .{
@@ -326,7 +373,6 @@ fn handleWasmWebsocket(context: *AppContext) !void {
                         .producer = value.id,
                     }) catch {};
                 }
-                _ = parse_arena.reset(.retain_capacity);
             },
         }
     }
@@ -337,10 +383,8 @@ pub fn main() !void {
     var buffer: [2 * 1024 * 1024 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const allocator = switch (builtin.mode) {
-        .Debug => gpa.allocator(),
-        .ReleaseSafe => gpa.allocator(),
-        .ReleaseFast => std.heap.smp_allocator,
         .ReleaseSmall => fba.allocator(),
+        else => gpa.allocator(),
     };
 
     var io = try zio.Runtime.init(allocator, .{});
