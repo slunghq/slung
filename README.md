@@ -23,10 +23,11 @@
 | :-: | ---------------------------------------------------------------------------- | :----: |
 |  1  | Stream pipeline [[#1](https://github.com/slunghq/slung/issues/1)]            |   ⚠️   |
 |  2  | TSM tree [[#2](https://github.com/slunghq/slung/issues/2)]                   |   ✅   |
-|  3  | Parallel data query engine [[#3](https://github.com/slunghq/slung/issues/3)] |   📅   |
-|  4  | Wasm execution                                                               |   📅   |
-|  5  | Write-ahead log (WAL)                                                        |   🚫   |
-|  6  | WebTransport                                                                 |   🚫   |
+|  3  | Parallel data query engine [[#3](https://github.com/slunghq/slung/issues/3)] |   ⚠️   |
+|  4  | Wasm execution                                                               |   ✅   |
+|  5  | Gateway                                                                      |   🚫   |
+|  6  | Write-ahead log (WAL)                                                        |   🚫   |
+|  7  | WebTransport                                                                 |   🚫   |
 
 + ✅ Done: Feature is implemented and verified.
 + ⚠️ In-progress: Active development or stabilization phase.
@@ -36,6 +37,7 @@
 ### Stream pipeline
 + [x] Non-blocking websocket channel [[#4](https://github.com/slunghq/slung/issues/4)]
 + [x] Stream rx/tx pool manager [[#5](https://github.com/slunghq/slung/issues/5)]
++ [ ] More streaming primitives (WebTransport, NATS, Kafka)
 + [ ] Multi-threaded networking (config). Note: this is implicitly supported.
 
 ### TSM tree
@@ -70,9 +72,16 @@ peak mem: 575 MiB
 ```
 
 ### Parallel query engine
-+ [ ] Query DSL [[#6](https://github.com/slunghq/slung/issues/6)]
-+ [ ] Async iterator [[#7](https://github.com/slunghq/slung/issues/7)]
++ [x] Query DSL [[#6](https://github.com/slunghq/slung/issues/6)]
++ [x] Async iterator [[#7](https://github.com/slunghq/slung/issues/7)]
+
+Optimisation: ReleaseFast:
+
+```
+TODO: benchmark
+```
 
 ### Wasm execution
-+ [ ] Host functions template
-+ [ ] Life cycle manager
++ [x] Host functions
++ [x] Life cycle manager
++ [x] HTTP write back
