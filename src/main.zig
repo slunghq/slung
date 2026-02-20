@@ -13,6 +13,7 @@ const AutoHashMap = std.AutoHashMap;
 const Channel = zio.Channel;
 const Query = query.Query;
 const TsmTree = tsm.TsmTree;
+const Notify = zio.Notify;
 const CHANNEL_CAPACITY = 8192 * 2;
 
 pub const AppContext = struct {
@@ -42,6 +43,7 @@ const Server = struct {
     series_key_hash_collisions: std.AutoHashMap(u64, void),
     next_query_id: std.atomic.Value(u32),
     tree: *TsmTree,
+    notify: *Notify,
 
     const ChannelData = struct {
         /// to be used as id if not streamed with data
@@ -54,6 +56,7 @@ const Server = struct {
         context: *AppContext,
         channel: *Channel(ChannelData),
         tree: *TsmTree,
+        notify: *Notify,
     ) !Server {
         return Server{
             .allocator = context.io.allocator,
@@ -68,6 +71,7 @@ const Server = struct {
             .series_key_hash_collisions = std.AutoHashMap(u64, void).init(context.io.allocator),
             .next_query_id = std.atomic.Value(u32).init(1),
             .tree = tree,
+            .notify = notify,
         };
     }
 
@@ -135,6 +139,7 @@ fn handleMessage(msg: http.WebSocket.Message, id: u64, context: *AppContext) !vo
         .id = id,
         .data = msg.data,
     };
+    if (context.server.notify.wait_queue.hasWaiters()) context.server.notify.broadcast();
     context.server.channel.send(message) catch |err| switch (err) {
         error.ChannelClosed => {
             std.log.debug("Producer {}: channel closed, exiting", .{id});
@@ -214,7 +219,24 @@ pub fn runServer(allocator: std.mem.Allocator, context: *AppContext) !void {
 }
 
 pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
-    const bytes = @embedFile("basic.wasm");
+    try context.server.notify.wait();
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    _ = args.next();
+    var wasm_path: ?[]const u8 = null;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--wasm")) {
+            wasm_path = args.next() orelse return error.InvalidArguments;
+            continue;
+        }
+        return error.InvalidArguments;
+    }
+    const path = wasm_path orelse @panic("Set the path to the Wasm file with --wasm <path>");
+    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024 * 1024);
+    defer allocator.free(bytes);
+
     const context_ptr = @intFromPtr(context);
     try execute.spawn(allocator, bytes, context_ptr);
 }
@@ -315,6 +337,7 @@ fn matchesSeriesAndTags(key: []const u8, series: []const u8, tags: []const []con
 }
 
 fn handleWasmWebsocket(context: *AppContext) !void {
+    try context.server.notify.wait();
     var key_scratch = std.ArrayList(u8).empty;
     defer key_scratch.deinit(context.io.allocator);
     var tag_scratch: std.ArrayList([]const u8) = .empty;
@@ -405,7 +428,9 @@ pub fn main() !void {
     var tree = try TsmTree.init(allocator, "demo");
     defer tree.deinit();
 
-    var server = try Server.init(&context, &channel, &tree);
+    var notify = Notify.init;
+
+    var server = try Server.init(&context, &channel, &tree, &notify);
     context.server = &server;
     defer server.deinit();
 
