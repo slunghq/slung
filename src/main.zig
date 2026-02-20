@@ -392,7 +392,6 @@ pub fn runServer(allocator: std.mem.Allocator, context: *AppContext) !void {
 }
 
 pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
-    try context.server.notify.wait();
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
@@ -411,6 +410,7 @@ pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
     defer allocator.free(bytes);
 
     const context_ptr = @intFromPtr(context);
+    try context.server.notify.wait();
     try execute.spawn(allocator, bytes, context_ptr);
 }
 
