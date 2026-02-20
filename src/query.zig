@@ -436,9 +436,9 @@ test "Query.matchesTags supports infix boolean expressions" {
 
 test "Query.matchesTags supports OR and unary NOT" {
     const query = try Query.init("SUM:cpu.total:[service=db OR NOT muted]");
-    const tags_a = [_][]const u8{ "service=db" };
-    const tags_b = [_][]const u8{ "muted=false" };
-    const tags_c = [_][]const u8{ "muted" };
+    const tags_a = [_][]const u8{"service=db"};
+    const tags_b = [_][]const u8{"muted=false"};
+    const tags_c = [_][]const u8{"muted"};
     try std.testing.expect(query.matchesTags(tags_a[0..]));
     try std.testing.expect(query.matchesTags(tags_b[0..]));
     try std.testing.expect(!query.matchesTags(tags_c[0..]));

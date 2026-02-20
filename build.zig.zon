@@ -45,6 +45,10 @@
             .url = "git+https://github.com/slunghq/zware#be0d934ed01e59fd48859b14c7074d50c0e98d22",
             .hash = "zware-0.0.1-ZA7j6egqBQAl3S23jLKjfPkZmD2jKY_uyczBl_crrebU",
         },
+        .codspeed = .{
+            .url = "git+https://github.com/james-elicx/codspeed-zig#00066158cab242c572368de69db9c58a548e8eb4",
+            .hash = "codspeed-0.0.1-Km8V_DhfBwDNpIj5PHSrZqekEjeVLhrLRUUYjXNsCGXJ",
+        },
     },
     .paths = .{
         "build.zig",

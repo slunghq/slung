@@ -1,4 +1,5 @@
 const std = @import("std");
+const Codspeed = @import("codspeed");
 const tsm = @import("src/tsm/tsm.zig");
 
 const TsmTree = tsm.TsmTreeImpl(1000, 4096, .gorilla);
@@ -12,11 +13,20 @@ const total_points: u128 = @as(u128, hosts.len) * points_per_host;
 const progress_interval: usize = 10_000;
 
 pub fn main() !void {
-    std.debug.print("Starting millions benchmark...\n", .{});
-
     var gpa = std.heap.DebugAllocator(.{}).init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    var codspeed = Codspeed.init(allocator, "millions.zig");
+    defer codspeed.deinit();
+
+    try codspeed.start("millions");
+    errdefer codspeed.stop("millions") catch {};
+    try runBenchmark(allocator);
+    try codspeed.stop("millions");
+}
+
+fn runBenchmark(allocator: std.mem.Allocator) !void {
+    std.debug.print("Starting millions benchmark...\n", .{});
 
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;

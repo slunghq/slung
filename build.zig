@@ -30,6 +30,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const codspeed = b.dependency("codspeed", .{
+        .target = target,
+        .optimize = benchmark_optimize,
+    });
 
     exe.root_module.addImport("zio", zio.module("zio"));
     exe.root_module.addImport("dusty", dusty.module("dusty"));
@@ -66,6 +70,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{},
         }),
     });
+    billions_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
 
     b.installArtifact(billions_exe);
 
@@ -83,6 +88,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{},
         }),
     });
+    millions_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
 
     b.installArtifact(millions_exe);
 

@@ -1,0 +1,55 @@
+name: Benchmarks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  codspeed:
+    name: CodSpeed (millions)
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Run CodSpeed benchmark
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: nix develop -c zig build millions
+
+  perf-native:
+    name: Native Perf (millions)
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (
+        contains(join(github.event.commits.*.added, ' '), 'millions.zig') ||
+        contains(join(github.event.commits.*.modified, ' '), 'millions.zig') ||
+        contains(join(github.event.commits.*.removed, ' '), 'millions.zig') ||
+        contains(join(github.event.commits.*.added, ' '), 'build.zig') ||
+        contains(join(github.event.commits.*.modified, ' '), 'build.zig') ||
+        contains(join(github.event.commits.*.removed, ' '), 'build.zig') ||
+        contains(join(github.event.commits.*.added, ' '), 'src/tsm/') ||
+        contains(join(github.event.commits.*.modified, ' '), 'src/tsm/') ||
+        contains(join(github.event.commits.*.removed, ' '), 'src/tsm/')
+      ))
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Run native benchmark
+        run: nix develop -c zig build millions
