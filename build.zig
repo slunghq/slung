@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const benchmark_optimize: std.builtin.OptimizeMode = .ReleaseFast;
 
     const exe = b.addExecutable(.{
         .name = "slung",
@@ -61,7 +62,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("billions.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = benchmark_optimize,
             .imports = &.{},
         }),
     });
@@ -73,5 +74,20 @@ pub fn build(b: *std.Build) void {
     const billions_run_cmd = b.addRunArtifact(billions_exe);
     billions_run_step.dependOn(&billions_run_cmd.step);
 
-    billions_run_cmd.step.dependOn(b.getInstallStep());
+    const millions_exe = b.addExecutable(.{
+        .name = "millions",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("millions.zig"),
+            .target = target,
+            .optimize = benchmark_optimize,
+            .imports = &.{},
+        }),
+    });
+
+    b.installArtifact(millions_exe);
+
+    const millions_run_step = b.step("millions", "Run the millions benchmark");
+
+    const millions_run_cmd = b.addRunArtifact(millions_exe);
+    millions_run_step.dependOn(&millions_run_cmd.step);
 }
