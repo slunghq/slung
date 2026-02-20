@@ -2,6 +2,14 @@ const std = @import("std");
 const tsm = @import("src/tsm/tsm.zig");
 
 const TsmTree = tsm.TsmTreeImpl(1000, 4096, .gorilla);
+const metric_name = "bench.cpu.total.billions";
+const hosts = [_][]const u8{
+    "h-0", "h-1", "h-2", "h-3", "h-4",
+    "h-5", "h-6", "h-7", "h-8", "h-9",
+};
+const points_per_host: usize = 100_000_000;
+const total_points: u128 = @as(u128, hosts.len) * points_per_host;
+const progress_interval: usize = 10_000_000;
 
 pub fn main() !void {
     std.debug.print("Starting billions benchmark...\n", .{});
@@ -17,24 +25,19 @@ pub fn main() !void {
     });
     const random = prng.random();
 
-    const hosts = [_][]const u8{
-        "h-0", "h-1", "h-2", "h-3", "h-4",
-        "h-5", "h-6", "h-7", "h-8", "h-9",
-    };
-
     var max_memory_bytes: u64 = 0;
 
-    var tree = try TsmTree.init(allocator, "cpu.total");
+    var tree = try TsmTree.init(allocator, metric_name);
     defer tree.deinit();
 
     const start = std.time.nanoTimestamp();
 
     for (hosts, 0..) |host, hidx| {
-        const series_key = try std.fmt.allocPrint(allocator, "cpu.total,env=prod,service=db,host={s}", .{host});
+        const series_key = try std.fmt.allocPrint(allocator, "{s},env=prod,service=db,host={s}", .{ metric_name, host });
         defer allocator.free(series_key);
 
-        for (0..100_000_000) |idx| {
-            const items_written: u128 = @as(u128, hidx) * 100_000_000 + idx;
+        for (0..points_per_host) |idx| {
+            const items_written: u128 = @as(u128, hidx) * points_per_host + idx + 1;
 
             const value: f64 = random.float(f64) * 100.0;
             const timestamp: i64 = @intCast(items_written);
@@ -44,7 +47,7 @@ pub fn main() !void {
                 .value = .{ .Float = value },
             });
 
-            if (idx > 0 and idx % 100_000_000 == 0) {
+            if (idx > 0 and idx % progress_interval == 0) {
                 const now = std.time.nanoTimestamp();
                 const elapsed_ns: u128 = @intCast(now - start);
 
@@ -70,7 +73,7 @@ pub fn main() !void {
     const elapsed_ns: u128 = @intCast(end - start);
     const elapsed_secs = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
 
-    const items_written: u128 = 1_000_000_000;
+    const items_written: u128 = total_points;
     const ns_per_item = elapsed_ns / items_written;
     const write_speed = 1_000_000_000 / ns_per_item;
 
@@ -79,8 +82,10 @@ pub fn main() !void {
         max_memory_bytes = current_memory;
     }
 
+    try tree.flush();
+
     std.debug.print("\n", .{});
-    std.debug.print("ingested 1 billion in {d:.2}s\n", .{elapsed_secs});
+    std.debug.print("ingested {d} points in {d:.2}s\n", .{ items_written, elapsed_secs });
     std.debug.print("write latency per item: {d}ns\n", .{ns_per_item});
     std.debug.print("write speed: {d} WPS\n", .{write_speed});
     std.debug.print("peak mem: {d} MiB\n", .{max_memory_bytes / 1024 / 1024});
@@ -99,7 +104,7 @@ pub fn main() !void {
         while (try iter.next()) |entry| {
             if (entry.kind == .file) {
                 const name = entry.name;
-                if (std.mem.startsWith(u8, name, "_") and
+                if (isBenchmarkFile(name) and
                     (std.mem.endsWith(u8, name, ".dat") or std.mem.endsWith(u8, name, ".idx")))
                 {
                     const stat = try dir.statFile(name);
@@ -109,18 +114,18 @@ pub fn main() !void {
         }
     }
     std.debug.print("  Total: {d} bytes ({d:.2} GB)\n", .{ total_size, @as(f64, @floatFromInt(total_size)) / 1024.0 / 1024.0 / 1024.0 });
-    std.debug.print("  Bytes per point: {d:.2}\n", .{@as(f64, @floatFromInt(total_size)) / 1_000_000_000.0});
+    std.debug.print("  Bytes per point: {d:.2}\n", .{@as(f64, @floatFromInt(total_size)) / @as(f64, @floatFromInt(total_points))});
 
     std.debug.print("\n--- Query Benchmark ---\n", .{});
 
-    // Query 1M points total (100K per host from h-9, the last host written)
-    // h-9 has timestamps 900,000,000 to 999,999,999
+    // Query 1M points from h-9 (the last host).
     const query_host = "h-9";
-    const query_series_key = try std.fmt.allocPrint(allocator, "cpu.total,env=prod,service=db,host={s}", .{query_host});
+    const query_series_key = try std.fmt.allocPrint(allocator, "{s},env=prod,service=db,host={s}", .{ metric_name, query_host });
     defer allocator.free(query_series_key);
 
-    const lower_bound: i64 = 999_000_000; // last 1M points of h-9
-    const upper_bound: i64 = 999_999_999;
+    const host_end: i64 = @intCast(total_points);
+    const lower_bound: i64 = host_end - 1_000_000;
+    const upper_bound: i64 = host_end - 1;
 
     std.debug.print("  Querying {s} range {d}-{d} (1M points)\n", .{ query_host, lower_bound, upper_bound });
 
@@ -155,7 +160,7 @@ pub fn main() !void {
         while (try iter.next()) |entry| {
             if (entry.kind == .file) {
                 const name = entry.name;
-                if (std.mem.startsWith(u8, name, "_") and
+                if (isBenchmarkFile(name) and
                     (std.mem.endsWith(u8, name, ".dat") or std.mem.endsWith(u8, name, ".idx")))
                 {
                     dir.deleteFile(name) catch {};
@@ -167,6 +172,12 @@ pub fn main() !void {
     }
 
     std.debug.print("\nDone!\n", .{});
+}
+
+fn isBenchmarkFile(name: []const u8) bool {
+    if (!std.mem.startsWith(u8, name, "_")) return false;
+    const marker = "_" ++ metric_name ++ ".";
+    return std.mem.indexOf(u8, name, marker) != null;
 }
 
 fn getResidentMemory() !u64 {

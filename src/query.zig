@@ -49,9 +49,9 @@ pub const Query = struct {
 
     op: PollState,
     series: []const u8,
-    series_len: usize,
     tags: [MAX_TAG_TOKENS]TagToken,
     tags_len: usize,
+    has_time_range: bool,
     time_start: i64,
     time_end: i64,
 
@@ -59,9 +59,9 @@ pub const Query = struct {
         var query = Self{
             .op = parseOp(filter),
             .series = "",
-            .series_len = 0,
             .tags = undefined,
             .tags_len = 0,
+            .has_time_range = false,
             .time_start = 0,
             .time_end = 0,
         };
@@ -76,6 +76,7 @@ pub const Query = struct {
 
         if (iter_parts.next()) |range_part| {
             const range = try parseRange(range_part);
+            query.has_time_range = true;
             query.time_start = range.start;
             query.time_end = range.end;
 
@@ -105,6 +106,71 @@ pub const Query = struct {
 
     pub fn tagsSlice(self: *const Self) []const TagToken {
         return self.tags[0..self.tags_len];
+    }
+
+    pub fn matchesTags(self: *const Self, tags: []const []const u8) bool {
+        if (self.tags_len == 0) return true;
+
+        var idx: usize = 0;
+        var current = self.consumeOperand(tags, &idx) orelse return false;
+
+        while (idx < self.tags_len) {
+            const token = self.tags[idx];
+            idx += 1;
+            const op = switch (token) {
+                .op => |v| v,
+                .tag => return false,
+            };
+
+            var rhs_negated = false;
+            var combine_op = op;
+            if (op == .not_op) {
+                combine_op = .and_op;
+                rhs_negated = true;
+            }
+
+            const rhs = self.consumeOperandWithNegation(tags, &idx, rhs_negated) orelse return false;
+            current = switch (combine_op) {
+                .and_op => current and rhs,
+                .or_op => current or rhs,
+                .not_op => unreachable,
+            };
+        }
+
+        return current;
+    }
+
+    fn consumeOperand(self: *const Self, tags: []const []const u8, idx: *usize) ?bool {
+        return self.consumeOperandWithNegation(tags, idx, false);
+    }
+
+    fn consumeOperandWithNegation(self: *const Self, tags: []const []const u8, idx: *usize, initial_negated: bool) ?bool {
+        var negated = initial_negated;
+        while (idx.* < self.tags_len) {
+            switch (self.tags[idx.*]) {
+                .op => |op| {
+                    if (op == .not_op) {
+                        negated = !negated;
+                        idx.* += 1;
+                        continue;
+                    }
+                    return null;
+                },
+                .tag => |tag| {
+                    idx.* += 1;
+                    const contains = containsTag(tags, tag);
+                    return if (negated) !contains else contains;
+                },
+            }
+        }
+        return null;
+    }
+
+    fn containsTag(tags: []const []const u8, needle: []const u8) bool {
+        for (tags) |tag| {
+            if (std.mem.eql(u8, tag, needle)) return true;
+        }
+        return false;
     }
 
     fn parseTagOp(token: []const u8) ?TagOp {
@@ -336,6 +402,7 @@ test "Query.init supports relative range in full query" {
     const query = try Query.init("SUM:s1:[enabled]:[1m,now]");
     const after = std.time.microTimestamp();
 
+    try std.testing.expect(query.has_time_range);
     try std.testing.expect(query.time_start <= query.time_end);
     try std.testing.expect(query.time_end >= before);
     try std.testing.expect(query.time_end <= after);
@@ -347,6 +414,7 @@ test "Query.init allows query without range" {
     try std.testing.expectEqualStrings("s1", query.series);
     try std.testing.expectEqual(@as(usize, 1), query.tagsSlice().len);
     try std.testing.expectEqualStrings("enabled", query.tagsSlice()[0].tag);
+    try std.testing.expect(!query.has_time_range);
     try std.testing.expectEqual(0, query.time_start);
     try std.testing.expectEqual(0, query.time_end);
 }
@@ -356,4 +424,22 @@ test "Query.init rejects malformed full query parts" {
     try std.testing.expectError(error.InvalidTags, Query.init("AVG:series1:x:[1,2]"));
     try std.testing.expectError(error.InvalidRange, Query.init("AVG:series1:[x]:[1mo,now]"));
     try std.testing.expectError(error.InvalidQuery, Query.init("AVG:series1:[x]:[1,2]:extra"));
+}
+
+test "Query.matchesTags supports infix boolean expressions" {
+    const query = try Query.init("SUM:cpu.total:[env=prod AND host=h-9]");
+    const tags_ok = [_][]const u8{ "region=eu", "env=prod", "host=h-9" };
+    const tags_fail = [_][]const u8{ "env=prod", "host=h-8" };
+    try std.testing.expect(query.matchesTags(tags_ok[0..]));
+    try std.testing.expect(!query.matchesTags(tags_fail[0..]));
+}
+
+test "Query.matchesTags supports OR and unary NOT" {
+    const query = try Query.init("SUM:cpu.total:[service=db OR NOT muted]");
+    const tags_a = [_][]const u8{ "service=db" };
+    const tags_b = [_][]const u8{ "muted=false" };
+    const tags_c = [_][]const u8{ "muted" };
+    try std.testing.expect(query.matchesTags(tags_a[0..]));
+    try std.testing.expect(query.matchesTags(tags_b[0..]));
+    try std.testing.expect(!query.matchesTags(tags_c[0..]));
 }

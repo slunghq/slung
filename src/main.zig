@@ -41,6 +41,8 @@ const Server = struct {
     series_key_cache: std.StringArrayHashMap([]const u8),
     series_key_by_hash: std.AutoHashMap(u64, []const u8),
     series_key_hash_collisions: std.AutoHashMap(u64, void),
+    series_by_measurement: std.StringArrayHashMap(std.ArrayList([]const u8)),
+    series_by_measurement_tag: std.StringArrayHashMap(std.ArrayList([]const u8)),
     next_query_id: std.atomic.Value(u32),
     tree: *TsmTree,
     notify: *Notify,
@@ -69,6 +71,8 @@ const Server = struct {
             .series_key_cache = std.StringArrayHashMap([]const u8).init(context.io.allocator),
             .series_key_by_hash = std.AutoHashMap(u64, []const u8).init(context.io.allocator),
             .series_key_hash_collisions = std.AutoHashMap(u64, void).init(context.io.allocator),
+            .series_by_measurement = std.StringArrayHashMap(std.ArrayList([]const u8)).init(context.io.allocator),
+            .series_by_measurement_tag = std.StringArrayHashMap(std.ArrayList([]const u8)).init(context.io.allocator),
             .next_query_id = std.atomic.Value(u32).init(1),
             .tree = tree,
             .notify = notify,
@@ -83,19 +87,31 @@ const Server = struct {
         self.series_key_cache.deinit();
         self.series_key_by_hash.deinit();
         self.series_key_hash_collisions.deinit();
+        var iter_measurement = self.series_by_measurement.iterator();
+        while (iter_measurement.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.series_by_measurement.deinit();
+        var iter_measurement_tag = self.series_by_measurement_tag.iterator();
+        while (iter_measurement_tag.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.series_by_measurement_tag.deinit();
         self.connections.deinit();
         self.queries.deinit();
         self.query_events.deinit();
     }
 
-    pub fn internSeriesKey(self: *Server, key_bytes: []const u8) ![]const u8 {
+    pub fn internSeriesKey(self: *Server, key_bytes: []const u8) !struct { key: []const u8, inserted: bool } {
         const entry = try self.series_key_cache.getOrPut(key_bytes);
-        if (entry.found_existing) return entry.value_ptr.*;
+        if (entry.found_existing) return .{ .key = entry.value_ptr.*, .inserted = false };
 
         const owned = try self.allocator.dupe(u8, key_bytes);
         entry.key_ptr.* = owned;
         entry.value_ptr.* = owned;
-        return owned;
+        return .{ .key = owned, .inserted = true };
     }
 
     pub fn resolveSeriesKey(self: *Server, scratch: *std.ArrayList(u8), series: []const u8, tags: []const []const u8) ![]const u8 {
@@ -110,11 +126,168 @@ const Server = struct {
         }
 
         try writeSeriesKey(scratch, self.allocator, series, tags);
-        const key = try self.internSeriesKey(scratch.items);
+        const interned = try self.internSeriesKey(scratch.items);
+        const key = interned.key;
+        if (interned.inserted) {
+            try self.indexSeriesKey(key);
+        }
         if (!self.series_key_hash_collisions.contains(h)) {
             try self.series_key_by_hash.put(h, key);
         }
         return key;
+    }
+
+    pub fn matchingSeriesKeysForQuery(self: *Server, allocator: std.mem.Allocator, q: *const Query) ![]const []const u8 {
+        const universe = self.series_by_measurement.get(q.series) orelse return try allocator.alloc([]const u8, 0);
+        if (q.tagsSlice().len == 0) {
+            return try allocator.dupe([]const u8, universe.items);
+        }
+
+        var current = std.StringHashMap(void).init(allocator);
+        defer current.deinit();
+
+        var cursor: usize = 0;
+        var combined = false;
+        while (cursor < q.tagsSlice().len) {
+            const token = q.tagsSlice()[cursor];
+
+            if (!combined) {
+                var first = try self.operandSetForQuery(allocator, q, &cursor, universe.items);
+                defer first.deinit();
+                var it = first.iterator();
+                while (it.next()) |entry| {
+                    try current.put(entry.key_ptr.*, {});
+                }
+                combined = true;
+                continue;
+            }
+
+            const op = switch (token) {
+                .op => |v| v,
+                .tag => return error.InvalidTags,
+            };
+            cursor += 1;
+
+            var rhs = try self.operandSetForQuery(allocator, q, &cursor, universe.items);
+            defer rhs.deinit();
+
+            var merged = std.StringHashMap(void).init(allocator);
+            defer merged.deinit();
+
+            if (op == .or_op) {
+                var left_iter = current.iterator();
+                while (left_iter.next()) |entry| {
+                    try merged.put(entry.key_ptr.*, {});
+                }
+                var right_iter = rhs.iterator();
+                while (right_iter.next()) |entry| {
+                    try merged.put(entry.key_ptr.*, {});
+                }
+            } else {
+                var left_iter = current.iterator();
+                while (left_iter.next()) |entry| {
+                    if (rhs.contains(entry.key_ptr.*)) {
+                        try merged.put(entry.key_ptr.*, {});
+                    }
+                }
+            }
+
+            current.clearRetainingCapacity();
+            var merged_iter = merged.iterator();
+            while (merged_iter.next()) |entry| {
+                try current.put(entry.key_ptr.*, {});
+            }
+        }
+
+        var out = std.ArrayList([]const u8).empty;
+        defer out.deinit(allocator);
+        var iter = current.iterator();
+        while (iter.next()) |entry| {
+            try out.append(allocator, entry.key_ptr.*);
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    fn operandSetForQuery(self: *Server, allocator: std.mem.Allocator, q: *const Query, cursor: *usize, universe: []const []const u8) !std.StringHashMap(void) {
+        var negated = false;
+        while (cursor.* < q.tagsSlice().len) {
+            const token = q.tagsSlice()[cursor.*];
+            switch (token) {
+                .op => |op| {
+                    if (op != .not_op) return error.InvalidTags;
+                    negated = !negated;
+                    cursor.* += 1;
+                },
+                .tag => |tag| {
+                    cursor.* += 1;
+                    var direct = try self.seriesSetForTag(allocator, q.series, tag);
+                    defer direct.deinit();
+
+                    var out = std.StringHashMap(void).init(allocator);
+                    if (!negated) {
+                        var it = direct.iterator();
+                        while (it.next()) |entry| {
+                            try out.put(entry.key_ptr.*, {});
+                        }
+                    } else {
+                        for (universe) |series_key| {
+                            if (!direct.contains(series_key)) {
+                                try out.put(series_key, {});
+                            }
+                        }
+                    }
+                    return out;
+                },
+            }
+        }
+        return error.InvalidTags;
+    }
+
+    fn seriesSetForTag(self: *Server, allocator: std.mem.Allocator, series: []const u8, tag: []const u8) !std.StringHashMap(void) {
+        var out = std.StringHashMap(void).init(allocator);
+
+        var scratch = std.ArrayList(u8).empty;
+        defer scratch.deinit(allocator);
+        const key = try measurementTagKey(&scratch, allocator, series, tag);
+        const matches = self.series_by_measurement_tag.get(key) orelse return out;
+        for (matches.items) |series_key| {
+            try out.put(series_key, {});
+        }
+        return out;
+    }
+
+    fn indexSeriesKey(self: *Server, series_key: []const u8) !void {
+        var parts = std.mem.splitScalar(u8, series_key, ',');
+        const measurement = parts.next() orelse return error.InvalidSeriesKey;
+        try self.indexAppendMeasurement(measurement, series_key);
+
+        while (parts.next()) |tag| {
+            const trimmed = std.mem.trim(u8, tag, " \t\r\n");
+            if (trimmed.len == 0) continue;
+            try self.indexAppendMeasurementTag(measurement, trimmed, series_key);
+        }
+    }
+
+    fn indexAppendMeasurement(self: *Server, measurement: []const u8, series_key: []const u8) !void {
+        const entry = try self.series_by_measurement.getOrPut(measurement);
+        if (!entry.found_existing) {
+            entry.key_ptr.* = try self.allocator.dupe(u8, measurement);
+            entry.value_ptr.* = .empty;
+        }
+        try entry.value_ptr.append(self.allocator, series_key);
+    }
+
+    fn indexAppendMeasurementTag(self: *Server, measurement: []const u8, tag: []const u8, series_key: []const u8) !void {
+        var scratch = std.ArrayList(u8).empty;
+        defer scratch.deinit(self.allocator);
+        const key = try measurementTagKey(&scratch, self.allocator, measurement, tag);
+
+        const entry = try self.series_by_measurement_tag.getOrPut(key);
+        if (!entry.found_existing) {
+            entry.key_ptr.* = try self.allocator.dupe(u8, key);
+            entry.value_ptr.* = .empty;
+        }
+        try entry.value_ptr.append(self.allocator, series_key);
     }
 
     pub fn addConnection(self: *Server, websocket: *http.WebSocket) !u64 {
@@ -305,6 +478,14 @@ fn writeSeriesKey(out: *std.ArrayList(u8), allocator: std.mem.Allocator, series:
     }
 }
 
+fn measurementTagKey(scratch: *std.ArrayList(u8), allocator: std.mem.Allocator, measurement: []const u8, tag: []const u8) ![]const u8 {
+    scratch.clearRetainingCapacity();
+    try scratch.appendSlice(allocator, measurement);
+    try scratch.append(allocator, 0x1f);
+    try scratch.appendSlice(allocator, tag);
+    return scratch.items;
+}
+
 fn hashSeriesAndTags(series: []const u8, tags: []const []const u8) u64 {
     var hasher = std.hash.Wyhash.init(0);
     const len_buf: [8]u8 = std.mem.toBytes(@as(u64, @intCast(series.len)));
@@ -367,6 +548,12 @@ fn handleWasmWebsocket(context: *AppContext) !void {
                     const query_id = entry.key_ptr.*;
                     const q = entry.value_ptr;
                     if (!std.mem.eql(u8, q.series, message.series)) {
+                        continue;
+                    }
+                    if (!q.matchesTags(message.tags)) {
+                        continue;
+                    }
+                    if (q.has_time_range and (message.timestamp < q.time_start or message.timestamp > q.time_end)) {
                         continue;
                     }
 

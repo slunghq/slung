@@ -125,13 +125,15 @@ pub fn u_query_history(vm: *zware.VirtualMachine, context_ptr: usize) zware.Wasm
         },
     }
 
-    const series_key = buildQuerySeriesKey(context.io.allocator, &query) catch {
+    const series_keys = context.server.matchingSeriesKeysForQuery(context.io.allocator, &query) catch {
         try vm.pushOperand(f64, 0);
         return;
     };
-    defer context.io.allocator.free(series_key);
+    defer context.io.allocator.free(series_keys);
 
-    const value = context.server.tree.query(series_key, query.time_start, query.time_end, op) catch {
+    const start = if (query.has_time_range) query.time_start else std.math.minInt(i64);
+    const end = if (query.has_time_range) query.time_end else std.math.maxInt(i64);
+    const value = aggregateHistory(context, series_keys, start, end, op) catch {
         try vm.pushOperand(f64, 0);
         return;
     };
@@ -200,6 +202,8 @@ pub fn u_write_event(vm: *zware.VirtualMachine, context_ptr: usize) zware.WasmEr
         const query_id = entry.key_ptr.*;
         const q = entry.value_ptr;
         if (!std.mem.eql(u8, q.series, parsed.series)) continue;
+        if (!q.matchesTags(parsed.tags)) continue;
+        if (q.has_time_range and (timestamp < q.time_start or timestamp > q.time_end)) continue;
 
         switch (q.op) {
             .Avg => {
@@ -315,23 +319,38 @@ pub const PollState = union(enum) {
     None: void,
 };
 
-fn buildQuerySeriesKey(allocator: std.mem.Allocator, query: *const Query) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(allocator);
+fn aggregateHistory(context: *AppContext, series_keys: []const []const u8, start: i64, end: i64, op: QueryOp) !@import("../tsm/tsm.zig").TsmTree.Value {
+    const Value = @import("../tsm/tsm.zig").TsmTree.Value;
+    var count: u64 = 0;
+    var sum: f64 = 0;
+    var min = std.math.inf(f64);
+    var max = -std.math.inf(f64);
 
-    try out.appendSlice(allocator, query.series);
-    for (query.tagsSlice()) |token| {
-        switch (token) {
-            .tag => |tag| {
-                if (tag.len == 0) continue;
-                try out.append(allocator, ',');
-                try out.appendSlice(allocator, tag);
-            },
-            .op => {},
+    for (series_keys) |series_key| {
+        const values = context.server.tree.queryRaw(series_key, start, end) catch continue;
+        defer context.io.allocator.free(values);
+
+        for (values) |value| {
+            const f = switch (value) {
+                .Float => |v| v,
+                .Int => |v| @as(f64, @floatFromInt(v)),
+                .Bool => |v| @as(f64, @floatFromInt(@intFromBool(v))),
+                .Bytes => 0,
+            };
+            sum += f;
+            if (f < min) min = f;
+            if (f > max) max = f;
+            count += 1;
         }
     }
 
-    return out.toOwnedSlice(allocator);
+    return switch (op) {
+        .AVG => Value{ .Float = if (count == 0) 0 else sum / @as(f64, @floatFromInt(count)) },
+        .SUM => Value{ .Float = sum },
+        .COUNT => Value{ .Float = @as(f64, @floatFromInt(count)) },
+        .MIN => Value{ .Float = if (count == 0) 0 else min },
+        .MAX => Value{ .Float = if (count == 0) 0 else max },
+    };
 }
 
 fn parseWriteEventTags(
