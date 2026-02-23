@@ -21,6 +21,35 @@ pub const AppContext = struct {
     server: *Server,
 };
 
+pub const StreamConfig = struct {
+    ingest: Ingest = .{ .WebSocket = .{ .mode = .Native, .port = 2077 } },
+    flush: Flush = .Native,
+    sync: Sync = .None,
+    populate: Populate = .None,
+
+    const Ingest = union(enum) {
+        WebSocket: struct { mode: enum { Native, MsgPack }, port: u16 },
+        NATS: struct { subscription: []const u8, url: []const u8 },
+        HTTP: struct { port: u16 },
+        MQTT: struct { topics: []const []const u8, url: []const u8 },
+    };
+
+    const Flush = enum { Native, CSV };
+
+    const Sync = union(enum) {
+        None,
+        S3: []const u8,
+        R2: []const u8,
+        Socket: []const u8,
+    };
+
+    const Populate = union(enum) {
+        None,
+        CSV: []const u8,
+        TDMS: []const u8,
+    };
+};
+
 // rn we'll be making this single-instance
 // so we don't need to hold any extra server data
 const Server = struct {
@@ -46,6 +75,7 @@ const Server = struct {
     next_query_id: std.atomic.Value(u32),
     tree: *TsmTree,
     notify: *Notify,
+    stream_config: *StreamConfig,
 
     const ChannelData = struct {
         /// to be used as id if not streamed with data
@@ -59,6 +89,7 @@ const Server = struct {
         channel: *Channel(ChannelData),
         tree: *TsmTree,
         notify: *Notify,
+        stream_config: *StreamConfig,
     ) !Server {
         return Server{
             .allocator = context.io.allocator,
@@ -76,6 +107,7 @@ const Server = struct {
             .next_query_id = std.atomic.Value(u32).init(1),
             .tree = tree,
             .notify = notify,
+            .stream_config = stream_config,
         };
     }
 
@@ -617,7 +649,10 @@ pub fn main() !void {
 
     var notify = Notify.init;
 
-    var server = try Server.init(&context, &channel, &tree, &notify);
+    // TODO: parse from slung.toml or cli argument
+    var stream_config = StreamConfig{};
+
+    var server = try Server.init(&context, &channel, &tree, &notify, &stream_config);
     context.server = &server;
     defer server.deinit();
 
