@@ -14,7 +14,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "example:simulated": "tsx examples/simulated.ts"
+    "example:simulated": "tsx examples/simulated.ts",
+    "example:benchmark": "tsx examples/benchmark.ts",
+    "example:ws-server": "tsx examples/ws-bench-server.ts"
   },
   "devDependencies": {
     "@types/node": "^22.19.11",
