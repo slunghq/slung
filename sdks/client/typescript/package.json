@@ -1,7 +1,10 @@
 {
   "name": "@slunghq/client",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "TypeScript client SDK for sending events to Slung over WebSocket",
   "type": "module",
   "main": "./dist/index.js",
