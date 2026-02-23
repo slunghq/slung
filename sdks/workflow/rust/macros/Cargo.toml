@@ -2,6 +2,11 @@
 name = "slung-macros"
 version = "0.1.0"
 edition = "2024"
+authors = ["Ewan <ewan@slung.tech>"]
+license = "MIT"
+description = "An abstraction library for interacting with the Slung runtime."
+repository = "https://github.com/slunghq/slung"
+publish = true
 
 [lib]
 name = "slung_macros"

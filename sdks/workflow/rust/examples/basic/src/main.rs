@@ -3,7 +3,7 @@ use slung::prelude::*;
 #[main]
 fn main() -> Result<()> {
     // Subscribe to live stream updates.
-    let handle = query_live("SUM:temp:[sensor=1]")?;
+    let handle = query_live("AVG:temp:[sensor=1]")?;
     poll_handle(handle, on_event, 100.0)?;
 
     Ok(())

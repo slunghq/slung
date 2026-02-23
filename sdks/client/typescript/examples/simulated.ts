@@ -7,10 +7,10 @@ async function main(): Promise<void> {
   await client.connect();
 
   console.log("connected to slung websocket");
-  console.log("sending simulated events every 250ms");
+  console.log("sending simulated events every 10ms");
 
   const stop = client.startSimulatedStream({
-    intervalMs: 5,
+    intervalMs: 10,
     initialValue: 90,
     jitter: 1.2,
     series: "temp",

@@ -23,30 +23,35 @@ Here's a basic anomaly detection example:
 ```rust
 use slung::prelude::*;
 
-fn main() -> Result {
-  // Query live data stream
-  let handle = query_live("AVG:temp:[sensor=1]")?;
-  
-  // Query last hour's baseline
-  let baseline = query_history("AVG:temp:[sensor=1]:[1h,now]")?;
-  
-  poll(handle, detect_anomaly, (baseline, 1.5))?;
-  
-  Ok(())
+#[main]
+fn main() -> Result<()> {
+    // Subscribe to live stream updates.
+    let handle = query_live("AVG:temp:[sensor=1]")?;
+    poll_handle(handle, on_event, 100.0)?;
+
+    Ok(())
 }
 
-fn detect_anomaly(event: Event, baseline: Event, threshold: f64) -> Result {
-  // Compare against baseline in real-time
-  if event.value > baseline.value * threshold {
-    for producer in events.producers {
-      // Write back to producers
-      writeback_ws(producer, "OVERHEATING")?;
+fn on_event(event: Event, alert_threshold: f64) -> Result<()> {
+    if event.value > alert_threshold {
+        println!("event timestamp={} value={}", event.timestamp, event.value);
+        for producer in event.producers {
+            writeback_ws(producer, "ALERT: threshold exceeded")?;
+        }
     }
-  }
-  
-  Ok(())
+
+    Ok(())
 }
 ```
+
+## Query Syntax
+
+`OP:SERIES:[TAGS]:[RANGE]`
+
++ RANGE is optional
++ OP: AVG, MIN, MAX, SUM, COUNT
++ TAGS: AND, OR, NOT
++ RANGE: `[start_time,end_time]`. Timestamps in microseconds. Also supports sec, min, hour, day, week (short & plural forms apply).
 
 ## License
 
