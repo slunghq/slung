@@ -14,6 +14,23 @@
     </p>
 </p>
 
+## Getting Started
+
+The hardware requirement for running is relatively low. All you need is a machine with at least 1 GB of RAM, a CPU with at least 1 free core, and a place to store your data (data ratio is about 8.7MB/1M events).
+
+To build Slung from source is pretty simple:
+
++ Make sure you have [Zig](https://ziglang.org/), and [Nix](https://nixos.org/) installed.
++ Clone the [repository](https://github.com/slunghq/slung) locally.
++ Then run the following commands.
+
+```bash
+nix develop -c zig build --release=fast
+cp ./zig-out/bin/slung .
+```
+
+See [our docs](https://slung.tech/docs/quickstart) for more information.
+
 > [!WARNING]
 > This project is currently WIP and is no where near ready for production use.
 
