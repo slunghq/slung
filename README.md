@@ -26,8 +26,9 @@
 |  3  | Parallel data query engine [[#3](https://github.com/slunghq/slung/issues/3)] |   ⚠️   |
 |  4  | Wasm execution                                                               |   ✅   |
 |  5  | Gateway                                                                      |   📅   |
-|  6  | Write-ahead log (WAL)                                                        |   🚫   |
-|  7  | WebTransport                                                                 |   🚫   |
+|  6  | Object storage sync                                                          |   📅   |
+|  7  | Write-ahead log (WAL)                                                        |   🚫   |
+|  8  | WebTransport                                                                 |   🚫   |
 
 + ✅ Done: Feature is implemented and verified.
 + ⚠️ In-progress: Active development or stabilization phase.
