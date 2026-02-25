@@ -8,6 +8,8 @@ const tsm = @import("tsm/tsm.zig");
 const query = @import("query.zig");
 const net = std.net;
 const execute = @import("host/execute.zig");
+const csv = @import("csv.zig");
+const config = @import("config.zig");
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const Channel = zio.Channel;
@@ -21,34 +23,7 @@ pub const AppContext = struct {
     server: *Server,
 };
 
-pub const StreamConfig = struct {
-    ingest: Ingest = .{ .WebSocket = .{ .mode = .Native, .port = 2077 } },
-    flush: Flush = .Native,
-    sync: Sync = .None,
-    populate: Populate = .None,
-
-    const Ingest = union(enum) {
-        WebSocket: struct { mode: enum { Native, MsgPack }, port: u16 },
-        NATS: struct { subscription: []const u8, url: []const u8 },
-        HTTP: struct { port: u16 },
-        MQTT: struct { topics: []const []const u8, url: []const u8 },
-    };
-
-    const Flush = enum { Native, CSV };
-
-    const Sync = union(enum) {
-        None,
-        S3: []const u8,
-        R2: []const u8,
-        Socket: []const u8,
-    };
-
-    const Populate = union(enum) {
-        None,
-        CSV: []const u8,
-        TDMS: []const u8,
-    };
-};
+pub const StreamConfig = config.StreamConfig;
 
 // rn we'll be making this single-instance
 // so we don't need to hold any extra server data
@@ -432,10 +407,9 @@ pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--wasm")) {
-            wasm_path = args.next() orelse return error.InvalidArguments;
+            wasm_path = args.next() orelse return error.InvalidWasmPath;
             continue;
         }
-        return error.InvalidArguments;
     }
     const path = wasm_path orelse @panic("Set the path to the Wasm file with --wasm <path>");
     const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024 * 1024);
@@ -620,6 +594,23 @@ fn handleWasmWebsocket(context: *AppContext) !void {
     }
 }
 
+fn loadConfig(allocator: std.mem.Allocator, stream_config: *StreamConfig) !void {
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    _ = args.next();
+    var config_path: []const u8 = "./config.toml";
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--config")) {
+            config_path = args.next() orelse return error.InvalidConfigPath;
+            continue;
+        }
+    }
+
+    stream_config.* = (try config.parseFromConfigFile(allocator, config_path)).value;
+}
+
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}).init;
     var buffer: [2 * 1024 * 1024 * 1024]u8 = undefined;
@@ -651,6 +642,7 @@ pub fn main() !void {
 
     // TODO: parse from slung.toml or cli argument
     var stream_config = StreamConfig{};
+    try loadConfig(allocator, &stream_config);
 
     var server = try Server.init(&context, &channel, &tree, &notify, &stream_config);
     context.server = &server;
@@ -664,6 +656,8 @@ pub fn main() !void {
 }
 
 test {
+    _ = csv;
+    _ = config;
     _ = ds;
     _ = tsm;
     _ = query;
