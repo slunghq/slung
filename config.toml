@@ -4,18 +4,18 @@ lang = "rust"
 [ingest]
 method = ["websocket", "nats"]
 
-[[ingest.websocket]]
+[ingest.websocket]
 method = "native"
 port = 2077
 
-[[ingest.http]]
+[ingest.http]
 port = 2078
 
-[[ingest.nats]]
-subscribtions = ["slung"]
+[ingest.nats]
+subscriptions = ["slung"]
 url = "nats://localhost:4222"
 
-[[ingest.mqtt]]
+[ingest.mqtt]
 topics = ["slung"]
 url = "mqtt://localhost:1883"
 
@@ -35,13 +35,16 @@ bucket = "slung"
 port = 2080
 
 [populate]
-method = ["csv", "tdms"]
+method = ["csv", "tdms", "native"]
 
 [populate.csv]
-path = "/tmp/data.csv"
+path = ["/tmp/data.csv"]
 
 [populate.tdms]
-path = "/tmp/data.tdms"
+path = ["/tmp/data.tdms"]
+
+[populate.native]
+path = ["/tmp/_data.dat"]
 
 [tree]
 page_size = 4096

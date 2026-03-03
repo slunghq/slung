@@ -25,8 +25,9 @@ pub const StreamConfig = struct {
 
     pub const Populate = union(enum) {
         None,
-        CSV: []const u8,
-        TDMS: []const u8,
+        Native: []const []const u8,
+        CSV: []const []const u8,
+        TDMS: []const []const u8,
     };
 };
 
@@ -41,18 +42,16 @@ const RawConfig = struct {
 
     const Ingest = struct {
         method: []const []const u8,
-        websocket: ?[]const struct {
+        websocket: ?struct {
             method: []const u8,
             port: u16,
         } = null,
-        http: ?[]const struct { port: u16 } = null,
-        nats: ?[]const struct {
-            // Keep compatibility with existing typo in config.toml.
-            subscribtions: ?[]const []const u8 = null,
+        http: ?struct { port: u16 } = null,
+        nats: ?struct {
             subscriptions: ?[]const []const u8 = null,
             url: []const u8,
         } = null,
-        mqtt: ?[]const struct {
+        mqtt: ?struct {
             topics: []const []const u8,
             url: []const u8,
         } = null,
@@ -71,8 +70,9 @@ const RawConfig = struct {
 
     const Populate = struct {
         method: []const []const u8,
-        csv: ?struct { path: []const u8 } = null,
-        tdms: ?struct { path: []const u8 } = null,
+        native: ?struct { path: []const []const u8 } = null,
+        csv: ?struct { path: []const []const u8 } = null,
+        tdms: ?struct { path: []const []const u8 } = null,
     };
 
     const Tree = struct {
@@ -100,12 +100,6 @@ fn parseRawConfigFile(allocator: std.mem.Allocator, path: []const u8) !toml.Pars
     return parser.parseString(content);
 }
 
-fn tableItemAtOrFirst(comptime T: type, items: []const T, index: usize) T {
-    if (items.len == 0) @panic("tableItemAtOrFirst called with empty items");
-    if (index < items.len) return items[index];
-    return items[0];
-}
-
 pub fn parseFromConfigFile(allocator: std.mem.Allocator, path: []const u8) !ParsedStreamConfig {
     var parsed = try parseRawConfigFile(allocator, path);
     errdefer parsed.deinit();
@@ -117,8 +111,7 @@ pub fn parseFromConfigFile(allocator: std.mem.Allocator, path: []const u8) !Pars
     const ingest_list = try parsed.arena.allocator().alloc(StreamConfig.Ingest, cfg.ingest.method.len);
     for (cfg.ingest.method, 0..) |method, i| {
         if (std.ascii.eqlIgnoreCase(method, "websocket")) {
-            const websocket_items = cfg.ingest.websocket orelse return error.MissingIngestWebSocketConfig;
-            const websocket = tableItemAtOrFirst(@TypeOf(websocket_items[0]), websocket_items, i);
+            const websocket = cfg.ingest.websocket orelse return error.MissingIngestWebSocketConfig;
             if (std.ascii.eqlIgnoreCase(websocket.method, "msgpack")) {
                 ingest_list[i] = .{ .WebSocket = .{ .mode = .MsgPack, .port = websocket.port } };
             } else if (std.ascii.eqlIgnoreCase(websocket.method, "native")) {
@@ -127,18 +120,15 @@ pub fn parseFromConfigFile(allocator: std.mem.Allocator, path: []const u8) !Pars
                 return error.InvalidIngestMethod;
             }
         } else if (std.ascii.eqlIgnoreCase(method, "nats")) {
-            const nats_items = cfg.ingest.nats orelse return error.MissingIngestNatsConfig;
-            const nats = tableItemAtOrFirst(@TypeOf(nats_items[0]), nats_items, i);
-            const subscriptions = nats.subscriptions orelse nats.subscribtions orelse return error.MissingNatsSubscriptions;
+            const nats = cfg.ingest.nats orelse return error.MissingIngestNatsConfig;
+            const subscriptions = nats.subscriptions orelse return error.MissingNatsSubscriptions;
             if (subscriptions.len == 0) return error.MissingNatsSubscriptions;
             ingest_list[i] = .{ .NATS = .{ .subscriptions = subscriptions, .url = nats.url } };
         } else if (std.ascii.eqlIgnoreCase(method, "http")) {
-            const http_items = cfg.ingest.http orelse return error.MissingIngestHttpConfig;
-            const http = tableItemAtOrFirst(@TypeOf(http_items[0]), http_items, i);
+            const http = cfg.ingest.http orelse return error.MissingIngestHttpConfig;
             ingest_list[i] = .{ .HTTP = .{ .port = http.port } };
         } else if (std.ascii.eqlIgnoreCase(method, "mqtt")) {
-            const mqtt_items = cfg.ingest.mqtt orelse return error.MissingIngestMqttConfig;
-            const mqtt = tableItemAtOrFirst(@TypeOf(mqtt_items[0]), mqtt_items, i);
+            const mqtt = cfg.ingest.mqtt orelse return error.MissingIngestMqttConfig;
             ingest_list[i] = .{ .MQTT = .{ .topics = mqtt.topics, .url = mqtt.url } };
         } else {
             return error.InvalidIngestMethod;
@@ -175,6 +165,9 @@ pub fn parseFromConfigFile(allocator: std.mem.Allocator, path: []const u8) !Pars
     for (cfg.populate.method, 0..) |method, i| {
         if (std.ascii.eqlIgnoreCase(method, "none")) {
             populate_list[i] = .None;
+        } else if (std.ascii.eqlIgnoreCase(method, "native")) {
+            const native_cfg = cfg.populate.native orelse return error.MissingPopulateCsvConfig;
+            populate_list[i] = .{ .Native = native_cfg.path };
         } else if (std.ascii.eqlIgnoreCase(method, "csv")) {
             const csv_cfg = cfg.populate.csv orelse return error.MissingPopulateCsvConfig;
             populate_list[i] = .{ .CSV = csv_cfg.path };
@@ -225,14 +218,18 @@ test "parse mapped stream config from config.toml" {
         else => return error.TestExpectedS3Sync,
     }
 
-    try std.testing.expectEqual(@as(usize, 2), stream.populate.len);
+    try std.testing.expectEqual(@as(usize, 3), stream.populate.len);
     switch (stream.populate[0]) {
-        .CSV => |csv_path| try std.testing.expect(std.mem.eql(u8, csv_path, "/tmp/data.csv")),
+        .CSV => |csv_path| try std.testing.expect(std.mem.eql(u8, csv_path[0], "/tmp/data.csv")),
         else => return error.TestExpectedCsvPopulate,
     }
     switch (stream.populate[1]) {
-        .TDMS => |tdms_path| try std.testing.expect(std.mem.eql(u8, tdms_path, "/tmp/data.tdms")),
+        .TDMS => |tdms_path| try std.testing.expect(std.mem.eql(u8, tdms_path[0], "/tmp/data.tdms")),
         else => return error.TestExpectedTdmsPopulate,
+    }
+    switch (stream.populate[2]) {
+        .Native => |native_path| try std.testing.expect(std.mem.eql(u8, native_path[0], "/tmp/_data.dat")),
+        else => return error.TestExpectedNativePopulate,
     }
 }
 
@@ -249,27 +246,23 @@ test "parse config.toml cases" {
     try std.testing.expect(std.mem.eql(u8, cfg.ingest.method[0], "websocket"));
     try std.testing.expect(std.mem.eql(u8, cfg.ingest.method[1], "nats"));
 
-    const websocket_items = cfg.ingest.websocket orelse return error.TestMissingWebSocketTable;
-    try std.testing.expectEqual(@as(usize, 1), websocket_items.len);
-    try std.testing.expect(std.mem.eql(u8, websocket_items[0].method, "native"));
-    try std.testing.expectEqual(@as(u16, 2077), websocket_items[0].port);
+    const websocket = cfg.ingest.websocket orelse return error.TestMissingWebSocketTable;
+    try std.testing.expect(std.mem.eql(u8, websocket.method, "native"));
+    try std.testing.expectEqual(@as(u16, 2077), websocket.port);
 
-    const http_items = cfg.ingest.http orelse return error.TestMissingHttpTable;
-    try std.testing.expectEqual(@as(usize, 1), http_items.len);
-    try std.testing.expectEqual(@as(u16, 2078), http_items[0].port);
+    const http = cfg.ingest.http orelse return error.TestMissingHttpTable;
+    try std.testing.expectEqual(@as(u16, 2078), http.port);
 
-    const nats_items = cfg.ingest.nats orelse return error.TestMissingNatsTable;
-    try std.testing.expectEqual(@as(usize, 1), nats_items.len);
-    const nats_subs = nats_items[0].subscriptions orelse nats_items[0].subscribtions orelse return error.TestMissingNatsSubscriptions;
+    const nats = cfg.ingest.nats orelse return error.TestMissingNatsTable;
+    const nats_subs = nats.subscriptions orelse return error.TestMissingNatsSubscriptions;
     try std.testing.expectEqual(@as(usize, 1), nats_subs.len);
     try std.testing.expect(std.mem.eql(u8, nats_subs[0], "slung"));
-    try std.testing.expect(std.mem.eql(u8, nats_items[0].url, "nats://localhost:4222"));
+    try std.testing.expect(std.mem.eql(u8, nats.url, "nats://localhost:4222"));
 
-    const mqtt_items = cfg.ingest.mqtt orelse return error.TestMissingMqttTable;
-    try std.testing.expectEqual(@as(usize, 1), mqtt_items.len);
-    try std.testing.expectEqual(@as(usize, 1), mqtt_items[0].topics.len);
-    try std.testing.expect(std.mem.eql(u8, mqtt_items[0].topics[0], "slung"));
-    try std.testing.expect(std.mem.eql(u8, mqtt_items[0].url, "mqtt://localhost:1883"));
+    const mqtt = cfg.ingest.mqtt orelse return error.TestMissingMqttTable;
+    try std.testing.expectEqual(@as(usize, 1), mqtt.topics.len);
+    try std.testing.expect(std.mem.eql(u8, mqtt.topics[0], "slung"));
+    try std.testing.expect(std.mem.eql(u8, mqtt.url, "mqtt://localhost:1883"));
 
     try std.testing.expect(std.mem.eql(u8, cfg.flush.method, "native"));
     try std.testing.expect(std.mem.eql(u8, cfg.sync.method, "s3"));
@@ -281,14 +274,16 @@ test "parse config.toml cases" {
     try std.testing.expect(std.mem.eql(u8, r2.bucket, "slung"));
     try std.testing.expectEqual(@as(u16, 2080), socket.port);
 
-    try std.testing.expectEqual(@as(usize, 2), cfg.populate.method.len);
+    try std.testing.expectEqual(@as(usize, 3), cfg.populate.method.len);
     try std.testing.expect(std.mem.eql(u8, cfg.populate.method[0], "csv"));
     try std.testing.expect(std.mem.eql(u8, cfg.populate.method[1], "tdms"));
 
     const csv_cfg = cfg.populate.csv orelse return error.TestMissingPopulateCsv;
     const tdms_cfg = cfg.populate.tdms orelse return error.TestMissingPopulateTdms;
-    try std.testing.expect(std.mem.eql(u8, csv_cfg.path, "/tmp/data.csv"));
-    try std.testing.expect(std.mem.eql(u8, tdms_cfg.path, "/tmp/data.tdms"));
+    const native_cfg = cfg.populate.native orelse return error.TestMissingPopulateTdms;
+    try std.testing.expect(std.mem.eql(u8, csv_cfg.path[0], "/tmp/data.csv"));
+    try std.testing.expect(std.mem.eql(u8, tdms_cfg.path[0], "/tmp/data.tdms"));
+    try std.testing.expect(std.mem.eql(u8, native_cfg.path[0], "/tmp/_data.dat"));
 
     try std.testing.expectEqual(@as(u32, 4096), cfg.tree.page_size);
     try std.testing.expectEqual(@as(u32, 100_000), cfg.tree.max_level);
