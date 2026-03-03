@@ -14,7 +14,7 @@ const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const Channel = zio.Channel;
 const Query = query.Query;
-const TsmTree = tsm.TsmTree;
+const TsmTree = tsm.TsmTreeRuntime;
 const Notify = zio.Notify;
 const CHANNEL_CAPACITY = 8192 * 2;
 
@@ -635,14 +635,19 @@ pub fn main() !void {
     defer allocator.free(channel_buffer);
     var channel = Channel(Server.ChannelData).init(channel_buffer[0..]);
 
-    var tree = try TsmTree.init(allocator, "demo");
-    defer tree.deinit();
-
-    var notify = Notify.init;
-
     // TODO: parse from slung.toml or cli argument
     var stream_config = StreamConfig{};
     try loadConfig(allocator, &stream_config);
+
+    const backend: tsm.TsmTreeRuntime.EntryBackend = switch (stream_config.flush) {
+        .Native => .Native,
+        .CSV => .CSV,
+    };
+
+    var tree = try TsmTree.init(allocator, "demo", backend);
+    defer tree.deinit();
+
+    var notify = Notify.init;
 
     var server = try Server.init(&context, &channel, &tree, &notify, &stream_config);
     context.server = &server;

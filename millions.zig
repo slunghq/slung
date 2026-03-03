@@ -2,7 +2,8 @@ const std = @import("std");
 const Codspeed = @import("codspeed");
 const tsm = @import("src/tsm/tsm.zig");
 
-const TsmTree = tsm.TsmTreeImpl(1000, 4096, .gorilla);
+const TsmTree = tsm.TsmTreeRuntime;
+
 const metric_name = "bench.cpu.total.millions";
 const hosts = [_][]const u8{
     "h-0", "h-1", "h-2", "h-3", "h-4",
@@ -37,7 +38,7 @@ fn runBenchmark(allocator: std.mem.Allocator) !void {
 
     var max_memory_bytes: u64 = 0;
 
-    var tree = try TsmTree.init(allocator, metric_name);
+    var tree = try TsmTree.init(allocator, metric_name, .Native);
     defer tree.deinit();
 
     const start = std.time.nanoTimestamp();

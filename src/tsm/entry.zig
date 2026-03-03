@@ -4,18 +4,12 @@ const ds = @import("../ds/ds.zig");
 const Allocator = std.mem.Allocator;
 const HashMap = std.StringHashMap;
 const AutoHashMap = std.AutoHashMap;
-const cache_mod = @import("cache.zig");
-const Cache = cache_mod.Cache;
 const Bloom = ds.bloom.Bloom;
 const Hasher = ds.bloom.DefaultHashFn;
 const gorilla = @import("gorilla.zig");
+const types = @import("types.zig");
 
-pub const TimestampEncoding = enum {
-    /// Zigzag varint delta encoding - faster queries
-    delta,
-    /// Delta-of-delta bit encoding - better compression
-    gorilla,
-};
+pub const TimestampEncoding = types.TimestampEncoding;
 
 fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) type {
     return struct {
@@ -74,9 +68,9 @@ fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncodin
             len: u64,
         };
 
-        const Value = Cache(page_size, ts_encoding).Value;
+        const Value = types.Value;
 
-        pub fn flush(allocator: Allocator, cache: *Cache(page_size, ts_encoding), file_path: []const u8, level: usize) !*Self {
+        pub fn flush(allocator: Allocator, cache: anytype, file_path: []const u8, level: usize) !*Self {
             var entry = try allocator.create(Self);
             entry.allocator = allocator;
             entry.file_path = try allocator.dupe(u8, file_path);
