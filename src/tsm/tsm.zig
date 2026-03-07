@@ -1,10 +1,11 @@
 const std = @import("std");
 const testing = std.testing;
+const Allocator = std.mem.Allocator;
+
 const cache = @import("cache.zig");
 const entry = @import("entry.zig");
 const entry_csv = @import("entry_csv.zig");
 const types = @import("types.zig");
-const Allocator = std.mem.Allocator;
 pub const TimestampEncoding = types.TimestampEncoding;
 
 pub fn TsmTreeImpl(

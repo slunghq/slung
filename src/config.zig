@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const toml = @import("toml");
 
 pub const StreamConfig = struct {

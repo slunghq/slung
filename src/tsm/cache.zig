@@ -1,8 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
-const ds = @import("../ds/ds.zig");
 const Allocator = std.mem.Allocator;
 const HashMap = std.StringArrayHashMap;
+
+const ds = @import("../ds/ds.zig");
 const Skiplist = ds.skiplist.SkipList;
 const Bloom = ds.bloom.Bloom;
 const Hasher = ds.bloom.DefaultHashFn;

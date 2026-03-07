@@ -1,29 +1,31 @@
 const std = @import("std");
-const builtin = @import("builtin");
-const zio = @import("zio");
-const http = @import("dusty");
 const testing = std.testing;
-const ds = @import("ds/ds.zig");
-const tsm = @import("tsm/tsm.zig");
-const query = @import("query.zig");
 const net = std.net;
-const execute = @import("host/execute.zig");
-const csv = @import("csv.zig");
-const config = @import("config.zig");
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
+const builtin = @import("builtin");
+
+const http = @import("dusty");
+const zio = @import("zio");
 const Channel = zio.Channel;
-const Query = query.Query;
-const TsmTree = tsm.TsmTreeRuntime;
 const Notify = zio.Notify;
+
+const config = @import("config.zig");
+pub const StreamConfig = config.StreamConfig;
+const csv = @import("csv.zig");
+const ds = @import("ds/ds.zig");
+const execute = @import("host/execute.zig");
+const query = @import("query.zig");
+const Query = query.Query;
+const tsm = @import("tsm/tsm.zig");
+const TsmTree = tsm.TsmTreeRuntime;
+
 const CHANNEL_CAPACITY = 8192 * 2;
 
 pub const AppContext = struct {
     io: *zio.Runtime,
     server: *Server,
 };
-
-pub const StreamConfig = config.StreamConfig;
 
 // rn we'll be making this single-instance
 // so we don't need to hold any extra server data
@@ -608,7 +610,9 @@ fn loadConfig(allocator: std.mem.Allocator, stream_config: *StreamConfig) !void 
         }
     }
 
-    stream_config.* = (try config.parseFromConfigFile(allocator, config_path)).value;
+    const parsed_config = config.parseFromConfigFile(allocator, config_path) catch return;
+
+    stream_config.* = (parsed_config).value;
 }
 
 pub fn main() !void {

@@ -1,10 +1,12 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+
 const zware = @import("zware");
-const host = @import("host.zig");
 const Store = zware.Store;
 const Module = zware.Module;
 const Instance = zware.Instance;
-const Allocator = std.mem.Allocator;
+
+const host = @import("host.zig");
 
 pub fn spawn(allocator: Allocator, bytes: []const u8, context_ptr: usize) !void {
     var store = Store.init(allocator);

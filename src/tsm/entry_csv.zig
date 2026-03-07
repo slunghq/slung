@@ -1,14 +1,14 @@
 const std = @import("std");
 const fs = std.fs;
-const ds = @import("../ds/ds.zig");
-const csv = @import("../csv.zig");
 const Allocator = std.mem.Allocator;
 const HashMap = std.StringHashMap;
 const AutoHashMap = std.AutoHashMap;
+
+const csv = @import("../csv.zig");
+const ds = @import("../ds/ds.zig");
 const Bloom = ds.bloom.Bloom;
 const Hasher = ds.bloom.DefaultHashFn;
 const types = @import("types.zig");
-
 pub const TimestampEncoding = types.TimestampEncoding;
 
 pub fn DiskEntryImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) type {
