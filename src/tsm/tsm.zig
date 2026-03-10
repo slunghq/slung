@@ -1,32 +1,39 @@
 const std = @import("std");
 const testing = std.testing;
+const Allocator = std.mem.Allocator;
+
 const cache = @import("cache.zig");
 const entry = @import("entry.zig");
-const Allocator = std.mem.Allocator;
-const Cache = cache.Cache;
-const DiskEntry = entry.DiskEntry;
-pub const TimestampEncoding = entry.TimestampEncoding;
+const entry_csv = @import("entry_csv.zig");
+const types = @import("types.zig");
+pub const TimestampEncoding = types.TimestampEncoding;
 
-pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts_encoding: TimestampEncoding) type {
+pub fn TsmTreeImpl(
+    comptime max_level: u64,
+    comptime page_size: u32,
+    comptime ts_encoding: TimestampEncoding,
+    comptime DiskEntry: fn (comptime u32, comptime TimestampEncoding) type,
+) type {
     return struct {
         const Self = @This();
         const MAX_CACHE_POINTS = 1_000_000;
         pub const timestamp_encoding = ts_encoding;
+        const CacheType = cache.CacheImplWithEntry(page_size, ts_encoding, DiskEntry);
 
         allocator: Allocator,
         name: []const u8,
         entries: []*DiskEntry(page_size, ts_encoding),
         entries_count: u64 = 0,
-        cache: *Cache(page_size, ts_encoding),
+        cache: *CacheType,
 
         pub const QueryOp = enum { AVG, MIN, MAX, SUM, COUNT };
 
-        pub const DataPoint = Cache(page_size, ts_encoding).DataPoint;
-        pub const Value = Cache(page_size, ts_encoding).Value;
+        pub const DataPoint = CacheType.DataPoint;
+        pub const Value = CacheType.Value;
 
         pub fn init(allocator: Allocator, name: []const u8) !Self {
-            const cache_ptr = try allocator.create(Cache(page_size, ts_encoding));
-            cache_ptr.* = Cache(page_size, ts_encoding).init(allocator);
+            const cache_ptr = try allocator.create(CacheType);
+            cache_ptr.* = CacheType.init(allocator);
             return Self{
                 .allocator = allocator,
                 .name = try allocator.dupe(u8, name),
@@ -70,6 +77,7 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
         pub fn insertBulk(self: *Self, series_key: []const u8, data_points: []DataPoint) !void {
             for (data_points) |data_point| {
                 try self.cache.insert(series_key, data_point);
+                if (self.cache.count > MAX_CACHE_POINTS) try self.flush();
             }
         }
 
@@ -233,7 +241,94 @@ pub fn TsmTreeImpl(comptime max_level: u64, comptime page_size: u32, comptime ts
     };
 }
 
-pub const TsmTree = TsmTreeImpl(100_000, 4096, .gorilla);
+pub const TsmTreeNative = TsmTreeImpl(100_000, 4096, .gorilla, entry.DiskEntry);
+pub const TsmTreeCsv = TsmTreeImpl(100_000, 4096, .gorilla, entry_csv.DiskEntry);
+pub const TsmTree = TsmTreeNative;
+
+pub const TsmTreeRuntime = union(enum) {
+    const Self = @This();
+
+    Native: TsmTreeNative,
+    CSV: TsmTreeCsv,
+
+    pub const QueryOp = TsmTreeNative.QueryOp;
+    pub const DataPoint = TsmTreeNative.DataPoint;
+    pub const Value = TsmTreeNative.Value;
+    pub const EntryBackend = enum {
+        Native,
+        CSV,
+    };
+
+    pub fn init(allocator: Allocator, name: []const u8, backend: EntryBackend) !Self {
+        return switch (backend) {
+            .Native => .{ .Native = try TsmTreeNative.init(allocator, name) },
+            .CSV => .{ .CSV = try TsmTreeCsv.init(allocator, name) },
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        switch (self.*) {
+            .Native => |*tree| tree.deinit(),
+            .CSV => |*tree| tree.deinit(),
+        }
+    }
+
+    pub fn flush(self: *Self) !void {
+        return switch (self.*) {
+            .Native => |*tree| tree.flush(),
+            .CSV => |*tree| tree.flush(),
+        };
+    }
+
+    pub fn insert(self: *Self, series_key: []const u8, data_point: DataPoint) !void {
+        return switch (self.*) {
+            .Native => |*tree| tree.insert(series_key, data_point),
+            .CSV => |*tree| tree.insert(series_key, data_point),
+        };
+    }
+
+    pub fn insertBulk(self: *Self, series_key: []const u8, data_points: []DataPoint) !void {
+        return switch (self.*) {
+            .Native => |*tree| tree.insertBulk(series_key, data_points),
+            .CSV => |*tree| tree.insertBulk(series_key, data_points),
+        };
+    }
+
+    pub fn insertBulkSeries(self: *Self, series_keys: []const []const u8, data_points: [][]DataPoint) !void {
+        return switch (self.*) {
+            .Native => |*tree| tree.insertBulkSeries(series_keys, data_points),
+            .CSV => |*tree| tree.insertBulkSeries(series_keys, data_points),
+        };
+    }
+
+    pub fn query(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64, op: QueryOp) !Value {
+        return switch (self.*) {
+            .Native => |*tree| tree.query(series_key, timestamp_start, timestamp_end, op),
+            .CSV => |*tree| tree.query(series_key, timestamp_start, timestamp_end, op),
+        };
+    }
+
+    pub fn queryRaw(self: *Self, series_key: []const u8, timestamp_start: i64, timestamp_end: i64) ![]Value {
+        return switch (self.*) {
+            .Native => |*tree| tree.queryRaw(series_key, timestamp_start, timestamp_end),
+            .CSV => |*tree| tree.queryRaw(series_key, timestamp_start, timestamp_end),
+        };
+    }
+
+    pub fn queryLatest(self: *Self, series_key: []const u8) !DataPoint {
+        return switch (self.*) {
+            .Native => |*tree| tree.queryLatest(series_key),
+            .CSV => |*tree| tree.queryLatest(series_key),
+        };
+    }
+
+    pub fn queryFirst(self: *Self, series_key: []const u8) !DataPoint {
+        return switch (self.*) {
+            .Native => |*tree| tree.queryFirst(series_key),
+            .CSV => |*tree| tree.queryFirst(series_key),
+        };
+    }
+};
 
 test {
     _ = cache;

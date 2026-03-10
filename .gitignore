@@ -16,6 +16,7 @@ dist
 *.tmp
 *.dat
 *.idx
+*.csv
 zig-watch*
 
 # local env files

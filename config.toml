@@ -1,0 +1,51 @@
+name = "basic"
+lang = "rust"
+
+[ingest]
+method = ["websocket", "nats"]
+
+[ingest.websocket]
+method = "native"
+port = 2077
+
+[ingest.http]
+port = 2078
+
+[ingest.nats]
+subscriptions = ["slung"]
+url = "nats://localhost:4222"
+
+[ingest.mqtt]
+topics = ["slung"]
+url = "mqtt://localhost:1883"
+
+[flush]
+method = "native"
+
+[sync]
+method = "s3"
+
+[sync.s3]
+bucket = "slung"
+
+[sync.r2]
+bucket = "slung"
+
+[sync.socket]
+port = 2080
+
+[populate]
+method = ["csv", "tdms", "native"]
+
+[populate.csv]
+path = ["/tmp/data.csv"]
+
+[populate.tdms]
+path = ["/tmp/data.tdms"]
+
+[populate.native]
+path = ["/tmp/_data.dat"]
+
+[tree]
+page_size = 4096
+max_level = 100_000

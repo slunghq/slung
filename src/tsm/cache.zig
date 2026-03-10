@@ -1,16 +1,17 @@
 const std = @import("std");
 const testing = std.testing;
-const ds = @import("../ds/ds.zig");
 const Allocator = std.mem.Allocator;
 const HashMap = std.StringArrayHashMap;
+
+const ds = @import("../ds/ds.zig");
 const Skiplist = ds.skiplist.SkipList;
 const Bloom = ds.bloom.Bloom;
 const Hasher = ds.bloom.DefaultHashFn;
 const entry_mod = @import("entry.zig");
-const DiskEntry = entry_mod.DiskEntry;
-const TimestampEncoding = entry_mod.TimestampEncoding;
+const types = @import("types.zig");
+const TimestampEncoding = types.TimestampEncoding;
 
-fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) type {
+pub fn CacheImplWithEntry(comptime page_size: u32, comptime ts_encoding: TimestampEncoding, comptime DiskEntry: fn (comptime u32, comptime TimestampEncoding) type) type {
     return struct {
         const Self = @This();
 
@@ -19,26 +20,8 @@ fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) t
         bloom: Bloom(1024, Hasher),
         count: u64 = 0,
 
-        pub const DataPoint = struct {
-            timestamp: i64,
-            value: Value,
-        };
-
-        pub const Value = union(enum) {
-            Bool: bool,
-            Int: i64,
-            Float: f64,
-            Bytes: []const u8,
-
-            pub fn compare(self: Value, b: Value) std.math.Order {
-                return switch (self) {
-                    .Int => |val| std.math.order(val, b.Int),
-                    .Float => |val| std.math.order(val, b.Float),
-                    .Bytes => |val| std.mem.order(u8, val, b.Bytes),
-                    .Bool => |val| std.math.order(@intFromBool(val), @intFromBool(b.Bool)),
-                };
-            }
-        };
+        pub const DataPoint = types.DataPoint;
+        pub const Value = types.Value;
 
         pub fn init(allocator: Allocator) Self {
             return Self{
@@ -106,6 +89,10 @@ fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) t
             return try DiskEntry(page_size, ts_encoding).flush(self.allocator, self, tsm_name, level);
         }
     };
+}
+
+pub fn CacheImpl(comptime page_size: u32, comptime ts_encoding: TimestampEncoding) type {
+    return CacheImplWithEntry(page_size, ts_encoding, entry_mod.DiskEntry);
 }
 
 pub const Cache = CacheImpl;

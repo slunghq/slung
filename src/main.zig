@@ -1,19 +1,25 @@
 const std = @import("std");
-const builtin = @import("builtin");
-const zio = @import("zio");
-const http = @import("dusty");
 const testing = std.testing;
-const ds = @import("ds/ds.zig");
-const tsm = @import("tsm/tsm.zig");
-const query = @import("query.zig");
 const net = std.net;
-const execute = @import("host/execute.zig");
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
+const builtin = @import("builtin");
+
+const http = @import("dusty");
+const zio = @import("zio");
 const Channel = zio.Channel;
-const Query = query.Query;
-const TsmTree = tsm.TsmTree;
 const Notify = zio.Notify;
+
+const config = @import("config.zig");
+pub const StreamConfig = config.StreamConfig;
+const csv = @import("csv.zig");
+const ds = @import("ds/ds.zig");
+const execute = @import("host/execute.zig");
+const query = @import("query.zig");
+const Query = query.Query;
+const tsm = @import("tsm/tsm.zig");
+const TsmTree = tsm.TsmTreeRuntime;
+
 const CHANNEL_CAPACITY = 8192 * 2;
 
 pub const AppContext = struct {
@@ -46,6 +52,7 @@ const Server = struct {
     next_query_id: std.atomic.Value(u32),
     tree: *TsmTree,
     notify: *Notify,
+    stream_config: *StreamConfig,
 
     const ChannelData = struct {
         /// to be used as id if not streamed with data
@@ -59,6 +66,7 @@ const Server = struct {
         channel: *Channel(ChannelData),
         tree: *TsmTree,
         notify: *Notify,
+        stream_config: *StreamConfig,
     ) !Server {
         return Server{
             .allocator = context.io.allocator,
@@ -76,6 +84,7 @@ const Server = struct {
             .next_query_id = std.atomic.Value(u32).init(1),
             .tree = tree,
             .notify = notify,
+            .stream_config = stream_config,
         };
     }
 
@@ -400,10 +409,9 @@ pub fn handleWasm(allocator: std.mem.Allocator, context: *AppContext) !void {
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--wasm")) {
-            wasm_path = args.next() orelse return error.InvalidArguments;
+            wasm_path = args.next() orelse return error.InvalidWasmPath;
             continue;
         }
-        return error.InvalidArguments;
     }
     const path = wasm_path orelse @panic("Set the path to the Wasm file with --wasm <path>");
     const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024 * 1024);
@@ -588,6 +596,25 @@ fn handleWasmWebsocket(context: *AppContext) !void {
     }
 }
 
+fn loadConfig(allocator: std.mem.Allocator, stream_config: *StreamConfig) !void {
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
+    _ = args.next();
+    var config_path: []const u8 = "./config.toml";
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--config")) {
+            config_path = args.next() orelse return error.InvalidConfigPath;
+            continue;
+        }
+    }
+
+    const parsed_config = config.parseFromConfigFile(allocator, config_path) catch return;
+
+    stream_config.* = (parsed_config).value;
+}
+
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}).init;
     var buffer: [2 * 1024 * 1024 * 1024]u8 = undefined;
@@ -612,12 +639,21 @@ pub fn main() !void {
     defer allocator.free(channel_buffer);
     var channel = Channel(Server.ChannelData).init(channel_buffer[0..]);
 
-    var tree = try TsmTree.init(allocator, "demo");
+    // TODO: parse from slung.toml or cli argument
+    var stream_config = StreamConfig{};
+    try loadConfig(allocator, &stream_config);
+
+    const backend: tsm.TsmTreeRuntime.EntryBackend = switch (stream_config.flush) {
+        .Native => .Native,
+        .CSV => .CSV,
+    };
+
+    var tree = try TsmTree.init(allocator, "demo", backend);
     defer tree.deinit();
 
     var notify = Notify.init;
 
-    var server = try Server.init(&context, &channel, &tree, &notify);
+    var server = try Server.init(&context, &channel, &tree, &notify, &stream_config);
     context.server = &server;
     defer server.deinit();
 
@@ -629,6 +665,8 @@ pub fn main() !void {
 }
 
 test {
+    _ = csv;
+    _ = config;
     _ = ds;
     _ = tsm;
     _ = query;
