@@ -9,8 +9,9 @@
 //! There's plans for a counting bloom filter and eventually a cuckoo filter.
 
 const std = @import("std");
-const bitmap = @import("bitmap.zig");
 const testing = std.testing;
+
+const bitmap = @import("bitmap.zig");
 
 fn BloomImpl(comptime size: usize, comptime HashFn: type) type {
     return struct {
@@ -147,7 +148,7 @@ pub const AlternateHashFn = struct {
     }
 };
 
-test "Bloom" {
+test "Bloom: insert/contains" {
     var bloom = Bloom(100, DefaultHashFn).init();
     defer bloom.deinit();
 
@@ -160,7 +161,7 @@ test "Bloom" {
     try testing.expect(bloom.len() == 100);
 }
 
-test "Bloom multi hash" {
+test "Bloom: multi hash" {
     var bloom = BloomMultiHash(100, &.{ DefaultHashFn, AlternateHashFn }).init();
     defer bloom.deinit();
 

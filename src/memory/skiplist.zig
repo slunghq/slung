@@ -1,4 +1,4 @@
-//! A skip list implementation.
+//! Skip list
 //!
 //! Skip list is a probabilistic data structure that allows efficient insertion, deletion, and search operations.
 //! It is a sorted linked list with a random number of levels, where each level is a subset of the previous level.
@@ -10,7 +10,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Order = std.math.Order;
 
-fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, comptime Rng: type, comptime CompareFn: fn (K, K) Order) type {
+pub fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, comptime Rng: type, comptime CompareFn: fn (K, K) Order) type {
     return struct {
         const Self = @This();
 
@@ -159,7 +159,7 @@ fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usize, c
 }
 
 /// A simple skip list implementation.
-pub const SkipList = SkipListImpl;
+pub const SkipList = SkipListImpl([]const u8, []const u8, 16, std.Random.Pcg, compare);
 
 pub fn compare(a: []const u8, b: []const u8) std.math.Order {
     return std.mem.order(u8, a, b);
@@ -173,10 +173,10 @@ pub fn compareI64(a: i64, b: i64) std.math.Order {
     return std.math.order(a, b);
 }
 
-test "SkipList" {
+test "SkipList: insert/search" {
     const allocator = std.testing.allocator;
 
-    var skip_list = try SkipList([]const u8, []const u8, 16, std.Random.Pcg, compare).init(allocator, @intCast(std.time.microTimestamp()));
+    var skip_list = try SkipList.init(allocator, @intCast(std.time.microTimestamp()));
     defer skip_list.deinit();
 
     _ = try skip_list.insert("key", "value");
@@ -188,10 +188,10 @@ test "SkipList" {
     try testing.expectEqualStrings("value", skip_list.search("key").?.value);
 }
 
-test "SkipList delete" {
+test "SkipList: delete" {
     const allocator = std.testing.allocator;
 
-    var skip_list = try SkipList(u64, u64, 16, std.Random.Pcg, compareU64).init(allocator, @intCast(std.time.microTimestamp()));
+    var skip_list = try SkipListImpl(u64, u64, 16, std.Random.Pcg, compareU64).init(allocator, @intCast(std.time.microTimestamp()));
     defer skip_list.deinit();
 
     _ = try skip_list.insert(1, 1);
