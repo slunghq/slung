@@ -73,39 +73,21 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
 
-    const billions_exe = b.addExecutable(.{
-        .name = "billions",
+    const benches_exe = b.addExecutable(.{
+        .name = "benches",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("billions.zig"),
+            .root_source_file = b.path("benches.zig"),
             .target = target,
             .optimize = benchmark_optimize,
             .imports = &.{},
         }),
     });
-    billions_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
+    benches_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
 
-    b.installArtifact(billions_exe);
+    b.installArtifact(benches_exe);
 
-    const billions_run_step = b.step("billions", "Run the billions benchmark");
+    const benches_run_step = b.step("benches", "Run the benches benchmark");
 
-    const billions_run_cmd = b.addRunArtifact(billions_exe);
-    billions_run_step.dependOn(&billions_run_cmd.step);
-
-    const millions_exe = b.addExecutable(.{
-        .name = "millions",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("millions.zig"),
-            .target = target,
-            .optimize = benchmark_optimize,
-            .imports = &.{},
-        }),
-    });
-    millions_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
-
-    b.installArtifact(millions_exe);
-
-    const millions_run_step = b.step("millions", "Run the millions benchmark");
-
-    const millions_run_cmd = b.addRunArtifact(millions_exe);
-    millions_run_step.dependOn(&millions_run_cmd.step);
+    const benches_run_cmd = b.addRunArtifact(benches_exe);
+    benches_run_step.dependOn(&benches_run_cmd.step);
 }
