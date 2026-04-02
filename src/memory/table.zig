@@ -100,6 +100,10 @@ pub const ColumnTable = struct {
         }
         self.allocator.free(self.columns);
         self.bloom.deinit();
+        var iter = self.index_row.keyIterator();
+        while (iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
         self.index_row.deinit(self.allocator);
         self.index_column.deinit(self.allocator);
         self.allocator.destroy(self);
@@ -113,6 +117,10 @@ pub const ColumnTable = struct {
             col.data.clearRetainingCapacity();
         }
         self.bloom.reset();
+        var iter = self.index_row.keyIterator();
+        while (iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
         self.index_row.clearRetainingCapacity();
         self.num_rows = 0;
     }
@@ -142,7 +150,7 @@ pub const ColumnTable = struct {
             try self.columns[i].data.append(self.allocator, stored);
         }
 
-        try self.index_row.put(self.allocator, row.key, row_id);
+        try self.index_row.put(self.allocator, try self.allocator.dupe(u8, row.key), row_id);
         self.num_rows += 1;
     }
 
