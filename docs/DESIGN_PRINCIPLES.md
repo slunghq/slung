@@ -1,4 +1,4 @@
-# DESIGN PRINCIPLES
+# Design Principles
 
 ## Intentionality
 
