@@ -33,9 +33,11 @@ pub fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usiz
         /// Initialise a skip list with a given allocator and rng seed.
         pub fn init(allocator: Allocator, seed: u64) !Self {
             var head = try allocator.create(Node);
+            errdefer allocator.destroy(head);
             head.key = undefined;
             head.value = undefined;
             head.forward = try allocator.alloc(?*Node, max_level);
+            errdefer allocator.free(head.forward);
             @memset(head.forward[0..], null);
             return Self{
                 .head = head,
@@ -95,9 +97,11 @@ pub fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usiz
             }
 
             var node = try self.allocator.create(Node);
+            errdefer self.allocator.destroy(node);
             node.key = key;
             node.value = val;
             node.forward = try self.allocator.alloc(?*Node, lvl);
+            errdefer self.allocator.free(node.forward);
 
             for (0..lvl) |i| {
                 node.forward[i] = update[i].forward[i];
@@ -116,6 +120,10 @@ pub fn SkipListImpl(comptime K: type, comptime V: type, comptime max_level: usiz
 
             while (self.level > 1) : (self.level -= 1) {
                 if (self.head.forward[self.level - 1] != null) break;
+            }
+
+            if (self.last_inserted == node) {
+                self.last_inserted = null;
             }
 
             self.allocator.free(node.forward);

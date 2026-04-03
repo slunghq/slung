@@ -77,12 +77,15 @@ pub const ColumnTable = struct {
         self.allocator = allocator;
         self.num_rows = 0;
         self.bloom = Bloom(4096, DefaultHashFn).init();
+        errdefer self.bloom.deinit();
         self.index_row = .{};
         self.index_column = .{};
         self.columns = try allocator.alloc(Column, column_names.len);
+        errdefer allocator.free(self.columns);
 
         for (self.columns, 0..) |*col, i| {
             col.name = try allocator.dupe(u8, column_names[i]);
+            errdefer allocator.free(col.name);
             col.data = .{};
             try self.index_column.put(allocator, col.name, @intCast(i));
         }
@@ -144,13 +147,26 @@ pub const ColumnTable = struct {
 
         for (row.values, 0..) |value, i| {
             const stored: Value = switch (value) {
-                .Bytes => |b| .{ .Bytes = try self.allocator.dupe(u8, b) },
+                .Bytes => |b| blk: {
+                    const owned = try self.allocator.dupe(u8, b);
+                    errdefer self.allocator.free(owned);
+                    break :blk .{ .Bytes = owned };
+                },
                 else => value,
             };
             try self.columns[i].data.append(self.allocator, stored);
         }
 
-        try self.index_row.put(self.allocator, try self.allocator.dupe(u8, row.key), row_id);
+        const owned_key = try self.allocator.dupe(u8, row.key);
+        errdefer self.allocator.free(owned_key);
+
+        const gop = try self.index_row.getOrPut(self.allocator, owned_key);
+        if (gop.found_existing) {
+            self.allocator.free(owned_key);
+        } else {
+            gop.key_ptr.* = owned_key;
+        }
+        gop.value_ptr.* = row_id;
         self.num_rows += 1;
     }
 
@@ -159,7 +175,14 @@ pub const ColumnTable = struct {
         const row_id = self.index_row.get(key) orelse return null;
 
         const vals = try self.allocator.alloc(Value, self.columns.len);
-        errdefer self.allocator.free(vals);
+        var duped: usize = 0;
+
+        errdefer {
+            for (vals[0..duped]) |v| {
+                if (v == .Bytes) self.allocator.free(v.Bytes);
+            }
+            self.allocator.free(vals);
+        }
 
         for (self.columns, 0..) |*col, i| {
             const v = col.data.items[row_id];
@@ -167,6 +190,7 @@ pub const ColumnTable = struct {
                 .Bytes => |b| .{ .Bytes = try self.allocator.dupe(u8, b) },
                 else => v,
             };
+            duped += 1;
         }
 
         return Row{

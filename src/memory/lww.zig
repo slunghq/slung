@@ -71,19 +71,23 @@ pub const LwwRegistry = struct {
     /// Insert or update a key if hlc > existing hlc (via total order comparison).
     /// Returns true if the write was accepted.
     pub fn put(self: *Self, key: []const u8, hlc_ts: Timestamp, value: Value, cause: CausalTag) !bool {
+        const owned_value = try self.dupeValue(value);
+        errdefer self.freeValue(owned_value);
+
         if (self.entries.getPtr(key)) |existing| {
-            if (hlc_ts.compare(existing.hlc) != .gt) return false;
+            if (hlc_ts.compare(existing.hlc) != .gt) {
+                self.freeValue(owned_value);
+                return false;
+            }
             self.freeValue(existing.value);
             existing.hlc = hlc_ts;
-            existing.value = try self.dupeValue(value);
+            existing.value = owned_value;
             existing.cause = cause;
             return true;
         }
 
         const owned_key = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned_key);
-        const owned_value = try self.dupeValue(value);
-        errdefer self.freeValue(owned_value);
 
         try self.entries.put(self.allocator, owned_key, .{
             .hlc = hlc_ts,
