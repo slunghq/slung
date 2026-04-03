@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   codspeed:
-    name: CodSpeed (millions)
+    name: CodSpeed (benches)
     runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
       - name: Checkout
@@ -26,22 +26,22 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: simulation
-          run: nix develop -c zig build millions
+          run: nix develop -c zig build benches
 
   perf-native:
-    name: Native Perf (millions)
+    name: Native Perf (benches)
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && (
-        contains(join(github.event.commits.*.added, ' '), 'millions.zig') ||
-        contains(join(github.event.commits.*.modified, ' '), 'millions.zig') ||
-        contains(join(github.event.commits.*.removed, ' '), 'millions.zig') ||
+        contains(join(github.event.commits.*.added, ' '), 'benches.zig') ||
+        contains(join(github.event.commits.*.modified, ' '), 'benches.zig') ||
+        contains(join(github.event.commits.*.removed, ' '), 'benches.zig') ||
         contains(join(github.event.commits.*.added, ' '), 'build.zig') ||
         contains(join(github.event.commits.*.modified, ' '), 'build.zig') ||
         contains(join(github.event.commits.*.removed, ' '), 'build.zig') ||
-        contains(join(github.event.commits.*.added, ' '), 'src/tsm/') ||
-        contains(join(github.event.commits.*.modified, ' '), 'src/tsm/') ||
-        contains(join(github.event.commits.*.removed, ' '), 'src/tsm/')
+        contains(join(github.event.commits.*.added, ' '), 'src/memory/') ||
+        contains(join(github.event.commits.*.modified, ' '), 'src/memory/') ||
+        contains(join(github.event.commits.*.removed, ' '), 'src/memory/')
       ))
     runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
@@ -52,4 +52,4 @@ jobs:
         uses: cachix/install-nix-action@v31
 
       - name: Run native benchmark
-        run: nix develop -c zig build millions
+        run: nix develop -c zig build benches

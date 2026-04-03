@@ -34,12 +34,12 @@
     // internet connectivity.
     .dependencies = .{
         .zio = .{
-            .url = "git+https://github.com/lalinsky/zio?ref=v0.8.1#d091a8e4ed5849e1eb1bd4a49fd019e48f00546d",
-            .hash = "zio-0.8.1-xHbVVGpjGADhmfXLbPcE9zPS0rTlCM3s5Z7EPX4chiwx",
+            .url = "git+https://github.com/lalinsky/zio?ref=v0.8.2#3ac234eae165177cd75742f922851dc5d373fd12",
+            .hash = "zio-0.8.2-xHbVVC5jGAAYUMZd_BW5eT-HJb_lf-LCGj4PaLOeEkA2",
         },
         .dusty = .{
-            .url = "git+https://github.com/lalinsky/dusty#eeaa9a38464b617ee59836bec77820fcc103eb63",
-            .hash = "dusty-0.0.0-Qdw7RjF_CQDBCV9L-GJlIOJHa7I6rGmp1mKfqV61ocuL",
+            .url = "git+https://github.com/lalinsky/dusty#7f18e52557fd4748cde9e73a7c4a8a9c7d9b4bb7",
+            .hash = "dusty-0.0.0-Qdw7RgD0CQCYDLh3FuSf3cIMmvhqpIhDiH6MlNH1DJsA",
         },
         .zware = .{
             .url = "git+https://github.com/slunghq/zware#be0d934ed01e59fd48859b14c7074d50c0e98d22",
@@ -48,6 +48,14 @@
         .codspeed = .{
             .url = "git+https://github.com/james-elicx/codspeed-zig#00066158cab242c572368de69db9c58a548e8eb4",
             .hash = "codspeed-0.0.1-Km8V_DhfBwDNpIj5PHSrZqekEjeVLhrLRUUYjXNsCGXJ",
+        },
+        .nats = .{
+            .url = "git+https://github.com/lalinsky/nats.zig#c7eb72dbdbf5e71c453c22b66a29356d0e6d2ad4",
+            .hash = "nats-0.0.0-JvIiUNy6BgBkOmLvuY1cfhjJLPg7CoFGRg6c91XteVqQ",
+        },
+        .toml = .{
+            .url = "git+https://github.com/notxorand/zig-toml#cf50bd59c6276fb2b6d34b8d71d35486eecc719c",
+            .hash = "toml-0.3.0-bV14Bd-EAQBKoXhpYft303BtA2vgLNlxntUCIWgRUl46",
         },
     },
     .paths = .{
