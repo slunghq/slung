@@ -15,15 +15,25 @@ pub fn getResidentMemory() !u64 {
         return try std.fmt.parseInt(u64, pages_str, 10) * 4096;
     } else if (builtin.os.tag == .macos) {
         var info: std.c.task_basic_info = undefined;
-        var count = std.c.TASK_BASIC_INFO_COUNT;
-        _ = std.c.task_info(std.c.mach_task_self(), std.c.TASK_BASIC_INFO, @ptrCast(&info), &count);
+        var count: std.c.mach_msg_type_number_t = std.c.TASK_BASIC_INFO_COUNT;
+        const result = std.c.task_info(
+            std.c.mach_task_self(),
+            std.c.TASK_BASIC_INFO,
+            @ptrCast(&info),
+            &count,
+        );
+        if (result != std.c.KERN_SUCCESS) return error.TaskInfoFailed;
         return info.resident_size;
     } else if (builtin.os.tag == .windows) {
         var info: std.os.windows.PROCESS_MEMORY_COUNTERS = undefined;
-        if (std.os.windows.kernel32.GetProcessMemoryInfo(std.os.windows.kernel32.GetCurrentProcess(), &info, @sizeOf(std.os.windows.PROCESS_MEMORY_COUNTERS)) != 0) {
-            return info.WorkingSetSize;
+        if (std.os.windows.GetProcessMemoryInfo(
+            std.os.windows.GetCurrentProcess(),
+            &info,
+            @sizeOf(std.os.windows.PROCESS_MEMORY_COUNTERS),
+        ) == 0) {
+            return error.GetProcessMemoryInfoFailed;
         }
-        return error.UnsupportedOS;
+        return info.WorkingSetSize;
     } else {
         return error.UnsupportedOS;
     }
