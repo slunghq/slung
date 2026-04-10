@@ -21,6 +21,7 @@ const DefaultHashFn = bloom.DefaultHashFn;
 
 pub const ColumnTable = struct {
     const Self = @This();
+    pub const Value = @import("../types.zig").Value;
 
     allocator: Allocator,
     num_rows: u64,
@@ -28,31 +29,6 @@ pub const ColumnTable = struct {
     bloom: Bloom(4096, DefaultHashFn),
     index_row: std.StringHashMapUnmanaged(u64),
     index_column: std.StringHashMapUnmanaged(u32),
-
-    pub const Value = union(enum) {
-        Bool: bool,
-        Int: i64,
-        Float: f64,
-        Bytes: []const u8,
-
-        pub fn compare(self: Value, b: Value) std.math.Order {
-            return switch (self) {
-                .Int => |v| std.math.order(v, b.Int),
-                .Float => |v| std.math.order(v, b.Float),
-                .Bytes => |v| std.mem.order(u8, v, b.Bytes),
-                .Bool => |v| std.math.order(@intFromBool(v), @intFromBool(b.Bool)),
-            };
-        }
-
-        pub fn eql(self: Value, b: Value) bool {
-            return switch (self) {
-                .Bool => |v| v == b.Bool,
-                .Int => |v| v == b.Int,
-                .Float => |v| v == b.Float,
-                .Bytes => |v| std.mem.eql(u8, v, b.Bytes),
-            };
-        }
-    };
 
     pub const Row = struct {
         key: []const u8,
@@ -238,6 +214,9 @@ pub const ColumnTable = struct {
         return self.columns[col_id].data.items[row];
     }
 };
+
+const Mutex = @import("../primitives/mutex.zig").Mutex(ColumnTable);
+pub const SafeColumnTable = @import("../primitives/arc.zig").Arc(Mutex);
 
 test "ColumnTable: insert and get" {
     const allocator = testing.allocator;

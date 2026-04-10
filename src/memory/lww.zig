@@ -17,13 +17,10 @@ const Allocator = std.mem.Allocator;
 
 const bloom = @import("../primitives/bloom.zig");
 const Bloom = bloom.Bloom;
+const CausalTag = @import("../types.zig").CausalTag;
 const DefaultHashFn = bloom.DefaultHashFn;
 const hlc = @import("../primitives/hlc.zig");
 const Timestamp = hlc.Timestamp;
-
-/// Identifies the rule or source that triggered a write.
-/// Used to inhibit conflicts and track causality in the inference loop.
-pub const CausalTag = u32;
 
 pub const LwwRegistry = struct {
     const Self = @This();
@@ -148,11 +145,11 @@ test "LwwRegistry: basic put and get" {
     defer reg.deinit();
 
     const ts = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
-    try testing.expect(try reg.put("cpu", ts, .{ .Float = 0.75 }, 1));
+    try testing.expect(try reg.put("cpu", ts, .{ .Float = 0.75 }, .{ .cause = 1, .entity = 1, .node = "" }));
     const e = reg.get("cpu").?;
     try testing.expect(e.hlc.eql(ts));
     try testing.expectApproxEqAbs(@as(f64, 0.75), e.value.Float, 0.001);
-    try testing.expectEqual(@as(u32, 1), e.cause);
+    try testing.expectEqual(CausalTag{ .cause = 1, .entity = 1, .node = "" }, e.cause);
 }
 
 test "LwwRegistry: newer HLC write wins" {
@@ -162,11 +159,11 @@ test "LwwRegistry: newer HLC write wins" {
     const ts1 = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
     const ts2 = Timestamp{ .wall = 200, .logical = 0, .node_id = 1 };
 
-    try testing.expect(try reg.put("k", ts1, .{ .Int = 100 }, 1));
-    try testing.expect(try reg.put("k", ts2, .{ .Int = 200 }, 2));
+    try testing.expect(try reg.put("k", ts1, .{ .Int = 100 }, .{ .cause = 1, .entity = 1, .node = "1" }));
+    try testing.expect(try reg.put("k", ts2, .{ .Int = 200 }, .{ .cause = 2, .entity = 1, .node = "2" }));
     try testing.expectEqual(@as(i64, 200), reg.get("k").?.value.Int);
     try testing.expect(reg.get("k").?.hlc.eql(ts2));
-    try testing.expectEqual(@as(u32, 2), reg.get("k").?.cause);
+    try testing.expectEqual(CausalTag{ .cause = 2, .entity = 1, .node = "2" }, reg.get("k").?.cause);
 }
 
 test "LwwRegistry: older HLC write is rejected" {
@@ -176,8 +173,8 @@ test "LwwRegistry: older HLC write is rejected" {
     const ts_old = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
     const ts_new = Timestamp{ .wall = 200, .logical = 0, .node_id = 1 };
 
-    try testing.expect(try reg.put("k", ts_new, .{ .Int = 42 }, 1));
-    try testing.expect(!try reg.put("k", ts_old, .{ .Int = 99 }, 2));
+    try testing.expect(try reg.put("k", ts_new, .{ .Int = 42 }, .{ .cause = 1, .entity = 1, .node = "1" }));
+    try testing.expect(!try reg.put("k", ts_old, .{ .Int = 99 }, .{ .cause = 2, .entity = 1, .node = "2" }));
     try testing.expectEqual(@as(i64, 42), reg.get("k").?.value.Int);
 }
 
@@ -187,10 +184,10 @@ test "LwwRegistry: equal HLC is rejected (requires strict >)" {
 
     const ts = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
 
-    try testing.expect(try reg.put("k", ts, .{ .Int = 1 }, 1));
-    try testing.expect(!try reg.put("k", ts, .{ .Int = 2 }, 2));
+    try testing.expect(try reg.put("k", ts, .{ .Int = 1 }, .{ .cause = 1, .entity = 1, .node = "1" }));
+    try testing.expect(!try reg.put("k", ts, .{ .Int = 2 }, .{ .cause = 2, .entity = 1, .node = "2" }));
     try testing.expectEqual(@as(i64, 1), reg.get("k").?.value.Int);
-    try testing.expectEqual(@as(u32, 1), reg.get("k").?.cause);
+    try testing.expectEqual(CausalTag{ .cause = 1, .entity = 1, .node = "1" }, reg.get("k").?.cause);
 }
 
 test "LwwRegistry: node_id breaks ties in HLC" {
@@ -200,10 +197,10 @@ test "LwwRegistry: node_id breaks ties in HLC" {
     const ts_node1 = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
     const ts_node2 = Timestamp{ .wall = 100, .logical = 0, .node_id = 2 };
 
-    try testing.expect(try reg.put("k", ts_node1, .{ .Int = 1 }, 1));
-    try testing.expect(try reg.put("k", ts_node2, .{ .Int = 2 }, 2));
+    try testing.expect(try reg.put("k", ts_node1, .{ .Int = 1 }, .{ .cause = 1, .entity = 1, .node = "1" }));
+    try testing.expect(try reg.put("k", ts_node2, .{ .Int = 2 }, .{ .cause = 2, .entity = 1, .node = "2" }));
     try testing.expectEqual(@as(i64, 2), reg.get("k").?.value.Int);
-    try testing.expectEqual(@as(u32, 2), reg.get("k").?.cause);
+    try testing.expectEqual(CausalTag{ .cause = 2, .entity = 1, .node = "2" }, reg.get("k").?.cause);
 }
 
 test "LwwRegistry: missing key returns null" {
@@ -218,7 +215,7 @@ test "LwwRegistry: remove" {
     defer reg.deinit();
 
     const ts = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
-    try testing.expect(try reg.put("x", ts, .{ .Bool = true }, 1));
+    try testing.expect(try reg.put("x", ts, .{ .Bool = true }, .{ .cause = 1, .entity = 1, .node = "" }));
     try testing.expect(reg.remove("x"));
     try testing.expectEqual(@as(u32, 0), reg.count());
 }
@@ -228,7 +225,7 @@ test "LwwRegistry: remove frees memory" {
     defer reg.deinit();
 
     const ts = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
-    try testing.expect(try reg.put("key", ts, .{ .Bytes = "hello" }, 1));
+    try testing.expect(try reg.put("key", ts, .{ .Bytes = "hello" }, .{ .cause = 1, .entity = 1, .node = "" }));
     try testing.expect(reg.remove("key"));
     try testing.expectEqual(@as(u32, 0), reg.count());
     try testing.expect(reg.get("key") == null);
@@ -244,10 +241,10 @@ test "LwwRegistry: bytes value ownership" {
     const ts1 = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
     const ts2 = Timestamp{ .wall = 200, .logical = 0, .node_id = 1 };
 
-    try testing.expect(try reg.put("key", ts1, .{ .Bytes = s }, 1));
+    try testing.expect(try reg.put("key", ts1, .{ .Bytes = s }, .{ .cause = 1, .entity = 1, .node = "1" }));
     try testing.expectEqualStrings("hello", reg.get("key").?.value.Bytes);
 
-    try testing.expect(try reg.put("key", ts2, .{ .Bytes = "world" }, 2));
+    try testing.expect(try reg.put("key", ts2, .{ .Bytes = "world" }, .{ .cause = 2, .entity = 1, .node = "2" }));
     try testing.expectEqualStrings("world", reg.get("key").?.value.Bytes);
 }
 
@@ -260,7 +257,7 @@ test "LwwRegistry: reserve" {
         var buf: [16]u8 = undefined;
         const key = try std.fmt.bufPrint(&buf, "key-{d}", .{i});
         const ts = Timestamp{ .wall = 100 + @as(u64, @intCast(i)), .logical = 0, .node_id = 1 };
-        try testing.expect(try reg.put(key, ts, .{ .Int = @intCast(i) }, 1));
+        try testing.expect(try reg.put(key, ts, .{ .Int = @intCast(i) }, .{ .cause = 1, .entity = 1, .node = "" }));
     }
     try testing.expectEqual(@as(u32, 100), reg.count());
 }
@@ -275,12 +272,12 @@ test "LwwRegistry: merge applies HLC-based LWW" {
     const ts1 = Timestamp{ .wall = 100, .logical = 0, .node_id = 1 };
     const ts2 = Timestamp{ .wall = 200, .logical = 0, .node_id = 2 };
 
-    try testing.expect(try reg_a.put("shared", ts1, .{ .Int = 10 }, 10));
-    try testing.expect(try reg_b.put("shared", ts2, .{ .Int = 20 }, 20));
+    try testing.expect(try reg_a.put("shared", ts1, .{ .Int = 10 }, .{ .cause = 1, .entity = 1, .node = "1" }));
+    try testing.expect(try reg_b.put("shared", ts2, .{ .Int = 20 }, .{ .cause = 2, .entity = 1, .node = "2" }));
 
     try reg_a.merge(&reg_b);
 
     const merged = reg_a.get("shared").?;
     try testing.expectEqual(@as(i64, 20), merged.value.Int);
-    try testing.expectEqual(@as(u32, 20), merged.cause);
+    try testing.expectEqual(CausalTag{ .cause = 2, .entity = 1, .node = "2" }, merged.cause);
 }

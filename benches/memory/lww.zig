@@ -44,9 +44,8 @@ pub fn run(allocator: Allocator) !void {
         const key = key_slices[random.intRangeAtMost(usize, 0, n_keys - 1)];
         const ts = clock.send_with_wall(@intCast(wall_time));
         const val = LwwRegistry.Value{ .Float = random.float(f64) * 100.0 };
-        const cause: u32 = @intCast(random.intRangeAtMost(u32, 1, 100));
 
-        if (try reg.put(key, ts, val, cause)) accepted += 1;
+        if (try reg.put(key, ts, val, .{ .cause = 1, .entity = 1, .node = "" })) accepted += 1;
 
         if (i > 0 and i % progress_interval == 0) {
             const now = std.time.nanoTimestamp();
