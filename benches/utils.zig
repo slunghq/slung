@@ -3,12 +3,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub fn getResidentMemory() !u64 {
+pub fn getResidentMemory(io: std.Io) !u64 {
     if (builtin.os.tag == .linux) {
-        const file = try std.fs.openFileAbsolute("/proc/self/statm", .{});
-        defer file.close();
+        const file = try std.Io.Dir.openFileAbsolute(io, "/proc/self/statm", .{});
+        defer file.close(io);
+
         var buf: [256]u8 = undefined;
-        const n = try file.read(&buf);
+        var reader = file.reader(io, &buf);
+        const n = try reader.interface.readSliceShort(&buf);
+
         var it = std.mem.splitScalar(u8, buf[0..n], ' ');
         _ = it.next();
         const pages_str = it.next() orelse return error.ParseError;
@@ -39,8 +42,8 @@ pub fn getResidentMemory() !u64 {
     }
 }
 
-pub fn randomSeed() u64 {
+pub fn randomSeed(io: std.Io) u64 {
     var seed: u64 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+    io.random(std.mem.asBytes(&seed));
     return seed;
 }

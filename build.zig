@@ -15,20 +15,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{.{ .name = "slung", .module = mod }},
         }),
-        .use_llvm = true,
     });
 
     const zio = b.dependency("zio", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const dusty = b.dependency("dusty", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const zware = b.dependency("zware", .{
         .target = target,
         .optimize = optimize,
     });
@@ -38,7 +27,7 @@ pub fn build(b: *std.Build) void {
         .optimize = benchmark_optimize,
     });
 
-    const nats = b.dependency("nats", .{
+    const zwasm = b.dependency("zwasm", .{
         .target = target,
         .optimize = optimize,
     });
@@ -49,10 +38,11 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addImport("zio", zio.module("zio"));
-    exe.root_module.addImport("dusty", dusty.module("dusty"));
-    exe.root_module.addImport("zware", zware.module("zware"));
-    exe.root_module.addImport("nats", nats.module("nats"));
+    exe.root_module.addImport("zwasm", zwasm.module("zwasm"));
     exe.root_module.addImport("toml", toml.module("toml"));
+    mod.addImport("zio", zio.module("zio"));
+    mod.addImport("zwasm", zwasm.module("zwasm"));
+    mod.addImport("toml", toml.module("toml"));
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
@@ -92,4 +82,8 @@ pub fn build(b: *std.Build) void {
 
     const benches_run_cmd = b.addRunArtifact(benches_exe);
     benches_run_step.dependOn(&benches_run_cmd.step);
+
+    if (b.args) |args| {
+        benches_run_cmd.addArgs(args);
+    }
 }

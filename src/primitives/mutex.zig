@@ -20,7 +20,7 @@ pub fn Mutex(comptime T: type) type {
 
             /// Release the lock. Must be called or used with defer.
             pub fn deinit(self: Guard) void {
-                self.mutex.mutex.unlock();
+                self.mutex.mutex.unlock(self.mutex.io);
             }
 
             /// Access the protected data. Valid only while Guard is alive.
@@ -29,20 +29,22 @@ pub fn Mutex(comptime T: type) type {
             }
         };
 
-        mutex: std.Thread.Mutex,
+        mutex: std.Io.Mutex,
         data: T,
+        io: std.Io,
 
-        pub fn init(data: T) Self {
+        pub fn init(data: T, io: std.Io) Self {
             return Self{
-                .mutex = .{},
+                .mutex = .init,
                 .data = data,
+                .io = io,
             };
         }
 
         /// Acquire the lock (blocking) and return a Guard.
         /// The Guard must be released by calling deinit() (typically via defer).
         pub fn lock(self: *Self) Guard {
-            self.mutex.lock();
+            _ = self.mutex.lock(self.io) catch unreachable;
             return Guard{
                 .mutex = self,
             };
@@ -63,7 +65,7 @@ pub fn Mutex(comptime T: type) type {
 }
 
 test "Mutex: init and guard lock" {
-    var m = Mutex(u32).init(42);
+    var m = Mutex(u32).init(42, std.testing.io);
     {
         var guard = m.lock();
         defer guard.deinit();
@@ -72,7 +74,7 @@ test "Mutex: init and guard lock" {
 }
 
 test "Mutex: guard allows mutation" {
-    var m = Mutex(u32).init(10);
+    var m = Mutex(u32).init(10, std.testing.io);
     {
         var guard = m.lock();
         defer guard.deinit();
@@ -86,7 +88,7 @@ test "Mutex: guard allows mutation" {
 }
 
 test "Mutex: try_lock succeeds when unlocked" {
-    var m = Mutex(i64).init(123);
+    var m = Mutex(i64).init(123, std.testing.io);
     if (m.try_lock()) |guard| {
         defer guard.deinit();
         try testing.expectEqual(@as(i64, 123), guard.get().*);
@@ -96,7 +98,7 @@ test "Mutex: try_lock succeeds when unlocked" {
 }
 
 test "Mutex: try_lock returns null when locked" {
-    var m = Mutex(bool).init(true);
+    var m = Mutex(bool).init(true, std.testing.io);
     {
         var guard1 = m.lock();
         defer guard1.deinit();
@@ -107,7 +109,7 @@ test "Mutex: try_lock returns null when locked" {
 
 test "Mutex: struct value with guard" {
     const Point = struct { x: i32, y: i32 };
-    var m = Mutex(Point).init(.{ .x = 5, .y = 10 });
+    var m = Mutex(Point).init(.{ .x = 5, .y = 10 }, std.testing.io);
     {
         var guard = m.lock();
         defer guard.deinit();
@@ -123,7 +125,7 @@ test "Mutex: struct value with guard" {
 }
 
 test "Mutex: slice value with guard" {
-    var m = Mutex([]const u8).init("hello");
+    var m = Mutex([]const u8).init("hello", std.testing.io);
     {
         var guard = m.lock();
         defer guard.deinit();
@@ -133,7 +135,7 @@ test "Mutex: slice value with guard" {
 
 test "Mutex: with Arc for shared ownership" {
     const MutexedCounter = Mutex(u32);
-    var shared = try Arc(MutexedCounter).init(testing.allocator, MutexedCounter.init(0));
+    var shared = try Arc(MutexedCounter).init(testing.allocator, MutexedCounter.init(0, std.testing.io));
     defer shared.release();
 
     const c1 = shared.clone();
@@ -166,7 +168,7 @@ test "Mutex: with Arc for shared ownership" {
 
 test "Mutex: Arc with guard prevents use-after-unlock" {
     const MutexedValue = Mutex(u64);
-    var shared = try Arc(MutexedValue).init(testing.allocator, MutexedValue.init(0xdeadbeef));
+    var shared = try Arc(MutexedValue).init(testing.allocator, MutexedValue.init(0xdeadbeef, std.testing.io));
 
     const c1 = shared.clone();
     const c2 = shared.clone();

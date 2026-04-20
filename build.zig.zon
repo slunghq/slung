@@ -26,7 +26,7 @@
 
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
     // `zig build --fetch` can be used to fetch all dependencies of a package, recursively.
@@ -37,25 +37,17 @@
             .url = "git+https://github.com/lalinsky/zio?ref=v0.8.2#3ac234eae165177cd75742f922851dc5d373fd12",
             .hash = "zio-0.8.2-xHbVVC5jGAAYUMZd_BW5eT-HJb_lf-LCGj4PaLOeEkA2",
         },
-        .dusty = .{
-            .url = "git+https://github.com/lalinsky/dusty#7f18e52557fd4748cde9e73a7c4a8a9c7d9b4bb7",
-            .hash = "dusty-0.0.0-Qdw7RgD0CQCYDLh3FuSf3cIMmvhqpIhDiH6MlNH1DJsA",
-        },
-        .zware = .{
-            .url = "git+https://github.com/slunghq/zware#be0d934ed01e59fd48859b14c7074d50c0e98d22",
-            .hash = "zware-0.0.1-ZA7j6egqBQAl3S23jLKjfPkZmD2jKY_uyczBl_crrebU",
-        },
         .codspeed = .{
-            .url = "git+https://github.com/james-elicx/codspeed-zig#00066158cab242c572368de69db9c58a548e8eb4",
-            .hash = "codspeed-0.0.1-Km8V_DhfBwDNpIj5PHSrZqekEjeVLhrLRUUYjXNsCGXJ",
-        },
-        .nats = .{
-            .url = "git+https://github.com/lalinsky/nats.zig#c7eb72dbdbf5e71c453c22b66a29356d0e6d2ad4",
-            .hash = "nats-0.0.0-JvIiUNy6BgBkOmLvuY1cfhjJLPg7CoFGRg6c91XteVqQ",
+            .url = "git+https://github.com/notxorand/codspeed-zig#1bfd9391e7652ad96e10219f93befa1f9004b09d",
+            .hash = "codspeed-0.0.1-Km8V_B5kBwBtBGX-oHX6MBxYvuvWWAs2aNVO6_CA2Fg_",
         },
         .toml = .{
             .url = "git+https://github.com/notxorand/zig-toml#cf50bd59c6276fb2b6d34b8d71d35486eecc719c",
             .hash = "toml-0.3.0-bV14Bd-EAQBKoXhpYft303BtA2vgLNlxntUCIWgRUl46",
+        },
+        .zwasm = .{
+            .url = "https://github.com/clojurewasm/zwasm/archive/refs/tags/v1.10.0.tar.gz",
+            .hash = "zwasm-1.10.0-IBbzF3p4KgCAk17UOA6b8EER1zTaXmLLNkda9a_R5U2g",
         },
     },
     .paths = .{

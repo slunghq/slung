@@ -26,7 +26,7 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: simulation
-          run: nix develop -c zig build benches
+          run: nix develop -c zig build benches -- --runner
 
   perf-native:
     name: Native Perf (benches)

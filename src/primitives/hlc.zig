@@ -10,7 +10,7 @@
 //! Snapshots in Globally Distributed Databases" (HLC, 2014).
 //!
 //! Usage:
-//!   var clk = Hlc.init(node_id);
+//!   var clk = Hlc.init(node_id, io);
 //!   const ts = clk.send();           // before sending a message
 //!   clk.recv(remote_ts);             // on receiving a message
 //!   const order = ts.compare(other); // total order comparison
@@ -50,12 +50,14 @@ pub const Hlc = struct {
     node_id: u32,
     wall: u64,
     logical: u32,
+    io: std.Io,
 
-    pub fn init(node_id: u32) Self {
+    pub fn init(node_id: u32, io: std.Io) Self {
         return .{
             .node_id = node_id,
             .wall = 0,
             .logical = 0,
+            .io = io,
         };
     }
 
@@ -74,13 +76,13 @@ pub const Hlc = struct {
     /// Call before sending a message. Returns the timestamp to attach.
     /// Uses lazy wall sync - only bumps logical if wall hasn't advanced.
     pub fn send(self: *Self) Timestamp {
-        return self.send_with_wall(wallNow());
+        return self.send_with_wall(self.wallNow());
     }
 
     /// Call on receiving a message. Advances the local clock past the remote
     /// timestamp so all subsequent local events are causally after it.
     pub fn recv(self: *Self, remote: Timestamp) Timestamp {
-        const wall_now = wallNow();
+        const wall_now = self.wallNow();
         const max_wall = @max(wall_now, @max(self.wall, remote.wall));
 
         if (max_wall == self.wall and max_wall == remote.wall) {
@@ -102,13 +104,13 @@ pub const Hlc = struct {
         return .{ .wall = self.wall, .logical = self.logical, .node_id = self.node_id };
     }
 
-    fn wallNow() u64 {
-        return @intCast(std.time.milliTimestamp());
+    fn wallNow(self: *const Self) u64 {
+        return @intCast(std.Io.Clock.real.now(self.io).toMilliseconds());
     }
 };
 
 test "Hlc: send is monotonic (lazy wall)" {
-    var clk = Hlc.init(1);
+    var clk = Hlc.init(1, std.testing.io);
     const t1 = clk.send();
     const t2 = clk.send();
     const t3 = clk.send();
@@ -117,8 +119,9 @@ test "Hlc: send is monotonic (lazy wall)" {
 }
 
 test "Hlc: recv advances past remote" {
-    var node_a = Hlc.init(1);
-    var node_b = Hlc.init(2);
+    const io = std.testing.io;
+    var node_a = Hlc.init(1, io);
+    var node_b = Hlc.init(2, io);
 
     const sent = node_a.send();
     const received = node_b.recv(sent);
@@ -148,8 +151,8 @@ test "Hlc: wall time dominates" {
 }
 
 test "Hlc: recv handles node_b ahead of node_a" {
-    var node_a = Hlc.init(1);
-    var node_b = Hlc.init(2);
+    var node_a = Hlc.init(1, std.testing.io);
+    var node_b = Hlc.init(2, std.testing.io);
 
     node_b.wall = 9_999_999_999;
     node_b.logical = 0;
@@ -161,7 +164,7 @@ test "Hlc: recv handles node_b ahead of node_a" {
 }
 
 test "Hlc: now does not advance clock" {
-    var clk = Hlc.init(42);
+    var clk = Hlc.init(42, std.testing.io);
     clk.wall = 1000;
     clk.logical = 5;
 
@@ -175,7 +178,7 @@ test "Hlc: now does not advance clock" {
 }
 
 test "Hlc: send_with_wall allows batched wall updates" {
-    var clk = Hlc.init(1);
+    var clk = Hlc.init(1, std.testing.io);
     const wall = 5000;
     const t1 = clk.send_with_wall(wall);
     const t2 = clk.send_with_wall(wall);

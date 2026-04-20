@@ -10,23 +10,38 @@ pub const SkipList = @import("src/memory/skiplist.zig").SkipList;
 pub const ColumnTable = @import("src/memory/table.zig").ColumnTable;
 pub const hlc = @import("src/primitives/hlc.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}).init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
-    var codspeed = Codspeed.init(allocator, "benches/benches.zig");
-    defer codspeed.deinit();
+    var args = init.minimal.args.iterate();
+    var use_codspeed = false;
 
-    try codspeed.start("memory.table");
-    try bench_table.run(allocator);
-    try codspeed.stop("memory.table");
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--runner")) {
+            use_codspeed = true;
+            break;
+        }
+    }
 
-    try codspeed.start("memory.lww");
-    try bench_lww.run(allocator);
-    try codspeed.stop("memory.lww");
+    if (use_codspeed) {
+        var codspeed = Codspeed.init(allocator, "benches/benches.zig");
+        defer codspeed.deinit();
 
-    try codspeed.start("memory.skiplist");
-    try bench_skiplist.run(allocator);
-    try codspeed.stop("memory.skiplist");
+        try codspeed.start("memory.table");
+        try bench_table.run(allocator, io);
+        try codspeed.stop("memory.table");
+
+        try codspeed.start("memory.lww");
+        try bench_lww.run(allocator, io);
+        try codspeed.stop("memory.lww");
+
+        try codspeed.start("memory.skiplist");
+        try bench_skiplist.run(allocator, io);
+        try codspeed.stop("memory.skiplist");
+    } else {
+        try bench_table.run(allocator, io);
+        try bench_lww.run(allocator, io);
+        try bench_skiplist.run(allocator, io);
+    }
 }

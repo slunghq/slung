@@ -1,5 +1,6 @@
 # build outputs
 .zig-cache
+zig-pkg
 zig-out
 target
 Cargo.lock

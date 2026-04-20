@@ -62,7 +62,7 @@ pub const ColumnTable = struct {
         for (self.columns, 0..) |*col, i| {
             col.name = try allocator.dupe(u8, column_names[i]);
             errdefer allocator.free(col.name);
-            col.data = .{};
+            col.data = .empty;
             try self.index_column.put(allocator, col.name, @intCast(i));
         }
 

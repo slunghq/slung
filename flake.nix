@@ -26,8 +26,8 @@
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            # Use Zig 0.15.2 from the overlay
-            zigpkgs."0.15.2"
+            # Use Zig 0.16.0 from the overlay
+            zigpkgs."0.16.0"
 
             # Additional libraries
             pkg-config

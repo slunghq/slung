@@ -183,8 +183,9 @@ pub fn compareI64(a: i64, b: i64) std.math.Order {
 
 test "SkipList: insert/search" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
-    var skip_list = try SkipList.init(allocator, @intCast(std.time.microTimestamp()));
+    var skip_list = try SkipList.init(allocator, @intCast(std.Io.Clock.real.now(io).toMicroseconds()));
     defer skip_list.deinit();
 
     _ = try skip_list.insert("key", "value");
@@ -198,8 +199,9 @@ test "SkipList: insert/search" {
 
 test "SkipList: delete" {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
-    var skip_list = try SkipListImpl(u64, u64, 16, std.Random.Pcg, compareU64).init(allocator, @intCast(std.time.microTimestamp()));
+    var skip_list = try SkipListImpl(u64, u64, 16, std.Random.Pcg, compareU64).init(allocator, @intCast(std.Io.Clock.real.now(io).toMicroseconds()));
     defer skip_list.deinit();
 
     _ = try skip_list.insert(1, 1);

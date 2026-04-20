@@ -13,10 +13,10 @@ const progress_interval: usize = 10_000;
 const col_names = [_][]const u8{ "timestamp", "value", "series_key" };
 const hosts = [_][]const u8{ "h-0", "h-1", "h-2", "h-3", "h-4", "h-5", "h-6", "h-7", "h-8", "h-9" };
 
-pub fn run(allocator: Allocator) !void {
+pub fn run(allocator: Allocator, io: std.Io) !void {
     std.debug.print("\n=== ColumnTable ===\n", .{});
 
-    var prng = std.Random.DefaultPrng.init(utils.randomSeed());
+    var prng = std.Random.DefaultPrng.init(utils.randomSeed(io));
     const random = prng.random();
 
     var table = try ColumnTable.init(allocator, &col_names);
@@ -24,7 +24,7 @@ pub fn run(allocator: Allocator) !void {
     try table.reserve(total_rows);
 
     var peak_mem: u64 = 0;
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Clock.awake.now(io);
     var written: usize = 0;
 
     for (hosts, 0..) |host, hi| {
@@ -41,23 +41,21 @@ pub fn run(allocator: Allocator) !void {
             try table.insert(.{ .key = series_key, .values = &vals });
 
             if (i > 0 and i % progress_interval == 0) {
-                const now = std.time.nanoTimestamp();
-                const elapsed: u128 = @intCast(now - start);
-                const ns_per = elapsed / written;
+                const elapsed_ns: u64 = @intCast(start.untilNow(io, .awake).toNanoseconds());
+                const ns_per = elapsed_ns / written;
                 const rps = if (ns_per > 0) 1_000_000_000 / ns_per else 0;
-                const mem = utils.getResidentMemory() catch 0;
+                const mem = utils.getResidentMemory(io) catch 0;
                 if (mem > peak_mem) peak_mem = mem;
                 std.debug.print("  [{s}] {d} rows - {d} rows/s - {d} MiB\n", .{ host, written, rps, peak_mem / 1024 / 1024 });
             }
         }
     }
 
-    const end = std.time.nanoTimestamp();
-    const elapsed_ns: u128 = @intCast(end - start);
+    const elapsed_ns: u64 = @intCast(start.untilNow(io, .awake).toNanoseconds());
     const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
     const ns_per = elapsed_ns / written;
     const rps = if (ns_per > 0) 1_000_000_000 / ns_per else 0;
-    const mem = utils.getResidentMemory() catch 0;
+    const mem = utils.getResidentMemory(io) catch 0;
     if (mem > peak_mem) peak_mem = mem;
 
     std.debug.print("  insert: {d} rows in {d:.2}s - {d} rows/s - {d}ns/row - peak {d} MiB\n", .{
@@ -72,7 +70,7 @@ pub fn run(allocator: Allocator) !void {
     std.debug.print("  query: scanning [{d}, {d}] on {s}\n", .{ lo, hi_ts, query_key });
 
     for (0..3) |qi| {
-        const qs = std.time.nanoTimestamp();
+        const qs = std.Io.Clock.awake.now(io);
 
         const ts_col = try table.getColumnById(0);
         const val_col = try table.getColumnById(1);
@@ -88,8 +86,8 @@ pub fn run(allocator: Allocator) !void {
             count += 1;
         }
 
-        const qe = std.time.nanoTimestamp();
-        const qms = @as(f64, @floatFromInt(qe - qs)) / 1e6;
+        const q_elapsed_ns: u64 = @intCast(qs.untilNow(io, .awake).toNanoseconds());
+        const qms = @as(f64, @floatFromInt(q_elapsed_ns)) / 1e6;
         const avg = if (count > 0) sum / @as(f64, @floatFromInt(count)) else 0;
         if (qi == 0) std.debug.print("  avg={d:.3} count={d}\n", .{ avg, count });
         std.debug.print("  run {d}: {d:.2}ms\n", .{ qi + 1, qms });
