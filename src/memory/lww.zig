@@ -67,7 +67,7 @@ pub const LwwRegistry = struct {
 
     /// Insert or update a key if hlc > existing hlc (via total order comparison).
     /// Returns true if the write was accepted.
-    pub fn put(self: *Self, key: []const u8, hlc_ts: Timestamp, value: Value, cause: CausalTag) !bool {
+    pub inline fn put(self: *Self, key: []const u8, hlc_ts: Timestamp, value: Value, cause: CausalTag) !bool {
         const owned_value = try self.dupeValue(value);
         errdefer self.freeValue(owned_value);
 
@@ -96,13 +96,13 @@ pub const LwwRegistry = struct {
     }
 
     /// Get the latest entry for a key, or null if not present.
-    pub fn get(self: *Self, key: []const u8) ?Entry {
+    pub inline fn get(self: *Self, key: []const u8) ?Entry {
         if (!self.bloom.contains(key)) return null;
         return self.entries.get(key);
     }
 
     /// Remove a key. Returns true if it existed.
-    pub fn remove(self: *Self, key: []const u8) bool {
+    pub inline fn remove(self: *Self, key: []const u8) bool {
         if (!self.bloom.contains(key)) return false;
         if (self.entries.fetchRemove(key)) |kv| {
             self.allocator.free(kv.key);

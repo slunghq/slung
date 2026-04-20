@@ -60,6 +60,24 @@ fn BitmapImpl(comptime size: usize) type {
             return self.bits[index / 8] & (@as(u8, 1) << @as(u3, @intCast(index % 8))) != 0;
         }
 
+        /// Set the bit at the given index directly, bypassing prepare/commit.
+        /// Use this for fast single-bit operations that don't need transactional semantics.
+        pub fn set_direct(self: *Self, index: usize) void {
+            if (index >= bit_size) {
+                return;
+            }
+            self.bits[index / 8] |= @as(u8, 1) << @as(u3, @intCast(index % 8));
+        }
+
+        /// Clear the bit at the given index directly, bypassing prepare/commit.
+        /// Use this for fast single-bit operations that don't need transactional semantics.
+        pub fn clear_direct(self: *Self, index: usize) void {
+            if (index >= bit_size) {
+                return;
+            }
+            self.bits[index / 8] &= ~(@as(u8, 1) << @as(u3, @intCast(index % 8)));
+        }
+
         /// Set all bits to 1.
         pub fn set_all(self: *Self) void {
             for (&self.dirty_bits) |*byte| {

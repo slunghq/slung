@@ -37,9 +37,7 @@ fn BloomImpl(comptime size: usize, comptime HashFn: type) type {
                 hash_value & (size - 1)
             else
                 hash_value % size;
-            self.mask.prepare();
-            self.mask.set(index);
-            self.mask.commit();
+            self.mask.set_direct(index);
         }
 
         /// Check if a value is in the bloom filter.
@@ -97,9 +95,7 @@ fn BloomMutliHashFn(comptime size: usize, comptime HashFn: []const type) type {
                     hash_value & (size - 1)
                 else
                     hash_value % size;
-                self.mask.prepare();
-                self.mask.set(index);
-                self.mask.commit();
+                self.mask.set_direct(index);
             }
         }
 

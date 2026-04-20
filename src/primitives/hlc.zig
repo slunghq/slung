@@ -24,21 +24,25 @@ pub const Timestamp = struct {
     logical: u32, // logical counter, reset when wall advances
     node_id: u32, // breaks ties between equal (wall, logical) pairs
 
-    pub fn compare(self: Timestamp, other: Timestamp) std.math.Order {
-        if (self.wall != other.wall) return std.math.order(self.wall, other.wall);
-        if (self.logical != other.logical) return std.math.order(self.logical, other.logical);
-        return std.math.order(self.node_id, other.node_id);
+    pub inline fn compare(self: Timestamp, other: Timestamp) std.math.Order {
+        if (self.wall > other.wall) return .gt;
+        if (self.wall < other.wall) return .lt;
+        if (self.logical > other.logical) return .gt;
+        if (self.logical < other.logical) return .lt;
+        if (self.node_id > other.node_id) return .gt;
+        if (self.node_id < other.node_id) return .lt;
+        return .eq;
     }
 
-    pub fn eql(self: Timestamp, other: Timestamp) bool {
+    pub inline fn eql(self: Timestamp, other: Timestamp) bool {
         return self.compare(other) == .eq;
     }
 
-    pub fn after(self: Timestamp, other: Timestamp) bool {
+    pub inline fn after(self: Timestamp, other: Timestamp) bool {
         return self.compare(other) == .gt;
     }
 
-    pub fn before(self: Timestamp, other: Timestamp) bool {
+    pub inline fn before(self: Timestamp, other: Timestamp) bool {
         return self.compare(other) == .lt;
     }
 };
