@@ -1,0 +1,30 @@
+[
+  {
+    "label": "nix: zig build",
+    "command": "nix develop",
+    "args": ["-c", "zig", "build"],
+    "allow_concurrent_runs": false,
+    "use_new_terminal": false,
+  },
+  {
+    "label": "nix: zig build run",
+    "command": "nix develop",
+    "args": ["-c", "zig", "build", "run"],
+    "allow_concurrent_runs": false,
+    "use_new_terminal": false,
+  },
+  {
+    "label": "nix: zig build test",
+    "command": "nix develop",
+    "args": ["-c", "zig", "build", "test"],
+    "allow_concurrent_runs": false,
+    "use_new_terminal": false,
+  },
+  {
+    "label": "nix: zig build benches",
+    "command": "nix develop",
+    "args": ["-c", "zig", "build", "benches"],
+    "allow_concurrent_runs": false,
+    "use_new_terminal": false,
+  },
+]

@@ -10,7 +10,6 @@ dist
 # misc
 .DS_Store
 *.pem
-.zed
 
 # debug
 *.log
