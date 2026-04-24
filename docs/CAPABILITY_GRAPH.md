@@ -33,8 +33,7 @@ When a module is loaded the host does one sweep of its exports. Three descriptor
 
 The host scans for exports matching `__slung_source_*_descriptor`. For each one found:
 
-+ Calls `__slung_source_<Name>_descriptor_len` to get byte length
-+ Calls `__slung_source_<Name>_descriptor` to get a pointer into Wasm linear memory
++ Calls `__slung_source_<Name>_descriptor` to get byte length and pointer
 + Reads and parses the descriptor JSON
 
 The source descriptor carries the entity name, the connector kind (builtin or custom), connection config, and the list of components attached to this entity. Each component entry names its mapper function - the Wasm export the host calls to translate raw source bytes into a typed component value:
