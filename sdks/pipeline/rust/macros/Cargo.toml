@@ -1,0 +1,26 @@
+[package]
+name = "slung-macros"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ewan <ewan@slung.tech>"]
+license = "MIT"
+description = "An abstraction library for interacting with the Slung runtime."
+repository = "https://github.com/slunghq/slung"
+publish = true
+
+[lib]
+name = "slung_macros"
+path = "src/lib.rs"
+proc-macro = true
+
+[dependencies]
+quote = "1.0.44"
+serde_json = "1.0.149"
+syn = { version = "2.0.115", features = ["full"] }
+
+[profile.release]
+lto = true
+opt-level = "z"
+
+[profile.dev]
+opt-level = 1
