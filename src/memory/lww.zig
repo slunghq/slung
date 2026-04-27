@@ -5,11 +5,11 @@
 //! Each entry tracks the causal tag (rule/source id) that produced the write.
 //!
 //! Design:
-//! - StringHashMapUnmanaged(Entry) - O(1) avg point lookup, no ordering needed
-//! - Entry now holds HLC timestamp + causal tag instead of u64 marker
-//! - Bloom filter for O(1) definite-miss short-circuit on get()
-//! - Bytes values are owned (duped on insert, freed on remove/deinit)
-//! - Keys are owned (duped on first insert, freed on remove/deinit)
+//! + StringHashMapUnmanaged(Entry) - O(1) avg point lookup, no ordering needed
+//! + Entry now holds HLC timestamp + causal tag instead of u64 marker
+//! + Bloom filter for O(1) definite-miss short-circuit on get()
+//! + Bytes values are owned (duped on insert, freed on remove/deinit)
+//! + Keys are owned (duped on first insert, freed on remove/deinit)
 
 const std = @import("std");
 const testing = std.testing;

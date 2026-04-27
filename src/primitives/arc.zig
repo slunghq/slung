@@ -4,11 +4,11 @@
 //! The inner value is freed when the last reference is released.
 //!
 //! Design:
-//! - Inner struct holds T + atomic refcount, allocated once on init
-//! - retain() increments refcount with AcqRel ordering
-//! - release() decrements and frees on zero with AcqRel ordering
-//! - clone() returns a new Arc pointing at the same inner allocation
-//! - Caller owns the Arc value - copy it to share, never alias the pointer
+//! + Inner struct holds T + atomic refcount, allocated once on init
+//! + retain() increments refcount with AcqRel ordering
+//! + release() decrements and frees on zero with AcqRel ordering
+//! + clone() returns a new Arc pointing at the same inner allocation
+//! + Caller owns the Arc value - copy it to share, never alias the pointer
 //!
 //! Thread safety: retain/release are safe to call from multiple threads.
 //! Mutating the inner value is NOT safe without external synchronisation -
