@@ -51,7 +51,7 @@
                         cat > zig-watch << 'EOF'
             #!/usr/bin/env bash
             echo "Watching Zig files for changes... (Press Ctrl+C to stop)"
-            find src -name "*.zig" | entr -c -r zig build run
+            zig build run --watch
             EOF
                         chmod +x zig-watch
                         alias zig-watch=./zig-watch
@@ -59,7 +59,7 @@
                         cat > zig-watch-test << 'EOF'
             #!/usr/bin/env bash
             echo "Watching Zig files for changes (test)... (Press Ctrl+C to stop)"
-            find src -name "*.zig" | entr -c zig build test
+            zig build test --summary all --watch
             EOF
                         chmod +x zig-watch-test
                         alias zig-watch-test=./zig-watch-test
