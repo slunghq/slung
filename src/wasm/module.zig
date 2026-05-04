@@ -35,7 +35,9 @@ pub const SourceDescriptor = struct {
 /// Component descriptor from module export.
 pub const ComponentDescriptor = struct {
     name: []const u8, // the ComponentType name
-    fields: []const []const u8,
+    kind: []const u8 = "struct",
+    fields: []const []const u8 = &.{},
+    variants: []const []const u8 = &.{},
 };
 
 /// Rule descriptor from module export.
@@ -69,7 +71,9 @@ pub const ComponentRegistry = struct {
     type_name: []const u8,
     mapper: []const u8,
     dynamic: bool,
+    kind: ?[]const u8 = null,
     fields: ?[]const []const u8 = null,
+    variants: ?[]const []const u8 = null,
 };
 
 /// Internal registry tracking for rules during graph building.
@@ -138,11 +142,20 @@ pub const GraphBuilder = struct {
         while (comps_iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.type_name);
             self.allocator.free(entry.value_ptr.mapper);
+            if (entry.value_ptr.kind) |kind| {
+                self.allocator.free(kind);
+            }
             if (entry.value_ptr.fields) |fields| {
                 for (fields) |f| {
                     self.allocator.free(f);
                 }
                 self.allocator.free(fields);
+            }
+            if (entry.value_ptr.variants) |variants| {
+                for (variants) |v| {
+                    self.allocator.free(v);
+                }
+                self.allocator.free(variants);
             }
         }
         self.components.deinit();
@@ -216,6 +229,11 @@ pub const GraphBuilder = struct {
             self.allocator.free(entry.type_name);
             entry.type_name = try self.allocator.dupe(u8, comp_desc.name);
 
+            if (entry.kind) |old_kind| {
+                self.allocator.free(old_kind);
+            }
+            entry.kind = try self.allocator.dupe(u8, comp_desc.kind);
+
             if (entry.fields) |old_fields| {
                 for (old_fields) |f| self.allocator.free(f);
                 self.allocator.free(old_fields);
@@ -226,6 +244,17 @@ pub const GraphBuilder = struct {
                 fields[i] = try self.allocator.dupe(u8, f);
             }
             entry.fields = fields;
+
+            if (entry.variants) |old_variants| {
+                for (old_variants) |v| self.allocator.free(v);
+                self.allocator.free(old_variants);
+            }
+
+            var variants = try self.allocator.alloc([]const u8, comp_desc.variants.len);
+            for (comp_desc.variants, 0..) |v, i| {
+                variants[i] = try self.allocator.dupe(u8, v);
+            }
+            entry.variants = variants;
         }
     }
 
@@ -585,12 +614,15 @@ test "GraphBuilder: ComponentRegistry fields and dynamic flag updated via regist
 
     // Verify initial registration
     try testing.expectEqualStrings("OldStatusType", comp_reg_ptr.type_name);
+    try testing.expect(comp_reg_ptr.kind == null);
     try testing.expect(comp_reg_ptr.fields == null);
+    try testing.expect(comp_reg_ptr.variants == null);
     try testing.expectEqual(false, comp_reg_ptr.dynamic);
 
     const comp_fields = &[_][]const u8{ "field1", "field2" };
     const component_desc: ComponentDescriptor = .{
         .name = "NewStatusType",
+        .kind = "struct",
         .fields = comp_fields,
     };
 
@@ -600,8 +632,11 @@ test "GraphBuilder: ComponentRegistry fields and dynamic flag updated via regist
     // Verify updated values
     comp_reg_ptr = builder.components.getPtr(key) orelse unreachable; // Re-get pointer after potential rehash
     try testing.expectEqualStrings("NewStatusType", comp_reg_ptr.type_name);
+    try testing.expectEqualStrings("struct", comp_reg_ptr.kind.?);
     try testing.expect(comp_reg_ptr.fields != null);
     try testing.expectEqual(@as(usize, 2), comp_reg_ptr.fields.?.len);
     try testing.expectEqualStrings("field1", comp_reg_ptr.fields.?[0]);
     try testing.expectEqualStrings("field2", comp_reg_ptr.fields.?[1]);
+    try testing.expect(comp_reg_ptr.variants != null);
+    try testing.expectEqual(@as(usize, 0), comp_reg_ptr.variants.?.len);
 }
