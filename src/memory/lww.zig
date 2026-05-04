@@ -29,12 +29,7 @@ pub const LwwRegistry = struct {
     entries: std.StringHashMapUnmanaged(Entry),
     bloom: Bloom(4096, DefaultHashFn),
 
-    pub const Value = union(enum) {
-        Bool: bool,
-        Int: i64,
-        Float: f64,
-        Bytes: []const u8,
-    };
+    pub const Value = @import("../types.zig").Value;
 
     pub const Entry = struct {
         hlc: Timestamp,
