@@ -28,9 +28,9 @@ The entity mapper translates incoming data from each source into EntityId + Comp
 
 Modules are Wasm binaries. The host discovers everything it needs to know about a module by scanning its exports at load time - no init function, no manual registration. Three export namespaces:
 
-**Source descriptors** (`__slung_source_<Name>_descriptor`) declare a data source: which built-in connector to use (or `custom` for raw primitives), and the connection config. The host reads this, opens the connection, and registers the source as an entity.
+**Source descriptors** (`__slung_source_<Name>_descriptor`) declare a data source: which built-in connector to use (or `custom` for raw primitives), the connection config, and the component fields attached to that source. Each component field carries its logical field name, referenced component type name, mapper export, and dynamic-entity flag. The host reads this, opens the connection, and registers the source as an entity.
 
-**Component descriptors** (`__slung_component_<Name>_descriptor`) declare a typed fact payload - an algebraic type that carries arbitrary data (e.g. `OrderStatus::Backlogged { reason, since }`). The host registers the ComponentId and uses the serialize/deserialize boundary when reading from and writing to Wasm linear memory.
+**Component descriptors** (`__slung_component_<Name>_descriptor`) declare a typed fact payload - an algebraic type that carries arbitrary data (e.g. `OrderStatus::Backlogged { reason, since }`). Descriptors include a `kind` discriminator (`struct` or `enum`) plus either named `fields` or enum `variants`. The host attaches that type metadata to the already-registered component entry and uses the serialize/deserialize boundary when reading from and writing to Wasm linear memory.
 
 **Rule descriptors** (`__slung_rule_<Name>_descriptor`) declare a rule: its watch list of ComponentIds, its priority, and a callable entrypoint (`__slung_rule_<Name>`) the host invokes when dispatching. The host populates the capability graph from the watch list and registers the rule in the rule registry.
 
@@ -58,6 +58,42 @@ slung_now, slung_yield
 ```
 
 SDKs wrap this ABI with ergonomic macros. The Rust SDK provides `#[source]`, `#[component]`, and `#[rule]` which expand to the descriptor exports and entrypoint glue. Rule authors never see the ABI.
+
+Descriptor JSON currently looks like:
+
+```json
+{
+  "name": "SensorData",
+  "kind": "builtin",
+  "builtin": "ws",
+  "config": "{}",
+  "components": [
+    {
+      "name": "temperature",
+      "type_name": "Temperature",
+      "mapper": "__slung_map_SensorData_temperature",
+      "dynamic": false
+    }
+  ]
+}
+```
+
+```json
+{
+  "name": "Temperature",
+  "kind": "struct",
+  "fields": ["value", "unit", "ts"]
+}
+```
+
+```json
+{
+  "name": "SensorStatus",
+  "kind": "enum",
+  "fields": [],
+  "variants": ["Ok", "Alert"]
+}
+```
 
 ### Active Memory
 

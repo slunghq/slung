@@ -43,11 +43,11 @@ The source descriptor carries the entity name, the connector kind (builtin or cu
     "name": "<Source>",
     "kind": "builtin",
     "builtin": "<connector>",
-    "config": { ... },
+    "config": "{ ... }",
     "components": [
         {
             "name":    "<component>",
-            "type":    "<ComponentType>",
+            "type_name":"<ComponentType>",
             "mapper":  "__slung_map_<Source>_<component>",
             "dynamic": true
         }
@@ -75,7 +75,19 @@ The host scans for exports matching `__slung_component_*_descriptor`. For each o
 ```json
 {
     "name":   "<ComponentType>",
+    "kind":   "struct",
     "fields": ["<field_a>", "<field_b>", "<field_c>"]
+}
+```
+
+Enum components use the same descriptor namespace, but carry variant names instead of named fields:
+
+```json
+{
+    "name":     "<ComponentType>",
+    "kind":     "enum",
+    "fields":   [],
+    "variants": ["<VariantA>", "<VariantB>"]
 }
 ```
 
