@@ -93,9 +93,11 @@ fn fetchRuleDescriptors(allocator: Allocator, wasm_module: *zwasm.WasmModule, bu
 }
 
 test "wire: parses wasm exports and builds indices from basic.wasm" {
-    const bytes = @embedFile("./testdata/basic.wasm");
+    const bytes = @embedFile("../testdata/basic.wasm");
     const allocator = std.testing.allocator;
-    var wasm_module = try zwasm.WasmModule.loadWasi(allocator, bytes);
+    const env_imports = try host.createEnvImport(allocator, 0);
+    defer allocator.free(env_imports.source.host_fns);
+    var wasm_module = try zwasm.WasmModule.loadWasiWithImports(allocator, bytes, &[_]zwasm.ImportEntry{env_imports}, .{});
     defer wasm_module.deinit();
 
     var forward = graph_index.ForwardIndex{};
