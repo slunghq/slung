@@ -47,6 +47,48 @@ fn keyBuf(namespace: []const u8, entity: u32, component: u32, buf: *[64]u8) ![]c
     return std.fmt.bufPrint(buf, "{s}:{d}:{d}", .{ namespace, entity, component });
 }
 
+fn invokeMapper(
+    wasm_module: *zwasm.WasmModule,
+    allocator: std.mem.Allocator,
+    mapper_name: []const u8,
+    raw_input: []const u8,
+) ![]const u8 {
+    const input_offset: u32 = 10000;
+    const output_offset: u32 = 20000;
+    const output_len_offset: u32 = 30000;
+
+    // Write raw input to wasm memory
+    try wasm_module.memoryWrite(input_offset, raw_input);
+
+    // Write output_len slot (initialized to 0)
+    var output_len_init: [4]u8 = undefined;
+    std.mem.writeInt(u32, &output_len_init, 0, .little);
+    try wasm_module.memoryWrite(output_len_offset, &output_len_init);
+
+    // Invoke mapper: mapper(input_ptr, input_len, output_ptr, output_len_ptr) -> status
+    var results = [_]u64{0};
+    try wasm_module.invoke(
+        mapper_name,
+        &.{ input_offset, raw_input.len, output_offset, output_len_offset },
+        results[0..],
+    );
+
+    const status: i32 = @bitCast(@as(u32, @intCast(results[0])));
+    if (status != 0) {
+        return error.MapperFailed;
+    }
+
+    // Read output length from memory
+    const output_len_bytes = try wasm_module.memoryRead(allocator, output_len_offset, 4);
+    defer allocator.free(output_len_bytes);
+    const output_len = std.mem.readInt(u32, output_len_bytes[0..4], .little);
+
+    // Read output from wasm memory
+    const output = try wasm_module.memoryRead(allocator, output_offset, output_len);
+
+    return output;
+}
+
 const WasmRuleDispatcher = struct {
     module: *zwasm.WasmModule,
     reverse: *graph_index.ReverseIndex,
@@ -68,7 +110,7 @@ const WasmRuleDispatcher = struct {
     }
 };
 
-test "E2E: local rule execution writes derived fact back into active memory" {
+test "E2E: multi-cycle cascade through rule chain" {
     const allocator = testing.allocator;
     const wasm_bytes = @embedFile("../testdata/e2e_local.wasm");
 
@@ -145,33 +187,45 @@ test "E2E: local rule execution writes derived fact back into active memory" {
 
     try wasm_wire.wire(allocator, wasm_module, &forward, &reverse, "test_ns", "e2e_local.wasm");
 
-    try testing.expectEqual(@as(usize, 2), forward.count());
-    try testing.expectEqual(@as(usize, 1), reverse.count());
+    try testing.expectEqual(@as(usize, 3), forward.count());
+    try testing.expectEqual(@as(usize, 2), reverse.count());
 
-    const reverse_entry = reverse.get(0) orelse return error.MissingRule;
-    try testing.expectEqual(@as(usize, 1), reverse_entry.watch.len);
-    const reading_key = reverse_entry.watch[0];
+    const rule0 = reverse.get(0) orelse return error.MissingRule0;
+    const rule1 = reverse.get(1) orelse return error.MissingRule1;
 
-    var alert_key_opt: ?graph_index.ForwardKey = null;
+    try testing.expect(rule0.watch.len >= 1);
+    try testing.expect(rule1.watch.len >= 1);
+    const reading_key = rule1.watch[0];
+    const alert_key = rule0.watch[0];
+
+    var notification_key_opt: ?graph_index.ForwardKey = null;
     var iter = forward.iterator();
     while (iter.next()) |entry| {
-        if (entry.key_ptr.component != reading_key.component) {
-            alert_key_opt = entry.key_ptr.*;
+        if (entry.key_ptr.component != reading_key.component and
+            entry.key_ptr.component != alert_key.component)
+        {
+            notification_key_opt = entry.key_ptr.*;
             break;
         }
     }
-    const alert_key = alert_key_opt orelse return error.MissingDerivedComponent;
+    const notification_key = notification_key_opt orelse return error.MissingNotificationComponent;
+
+    const reading_forward = forward.get(reading_key) orelse return error.MissingReadingForward;
 
     {
         var key_buf_reading: [64]u8 = undefined;
         const reading_store_key = try keyBuf("test_ns", reading_key.entity, reading_key.component, &key_buf_reading);
+
+        const raw_input = "42.0";
+        const mapped = try invokeMapper(wasm_module, allocator, reading_forward.mapper, raw_input);
+        defer allocator.free(mapped);
 
         var store_guard = lww_arc.getMut().lock();
         defer store_guard.deinit();
         try testing.expect(try store_guard.get().put(
             reading_store_key,
             clock.send(),
-            .{ .Float = 42.0 },
+            .{ .Bytes = mapped },
             .{ .cause = reading_key.component, .entity = reading_key.entity, .node = "node-1" },
         ));
     }
@@ -195,12 +249,9 @@ test "E2E: local rule execution writes derived fact back into active memory" {
         .dispatch_fn = WasmRuleDispatcher.dispatch,
     };
 
-    var loop = InferenceLoop.init(&context, dispatcher, 8, allocator);
+    var loop = InferenceLoop.init(&context, dispatcher, 10, allocator);
     const fired = try loop.run();
-    try testing.expectEqual(@as(usize, 1), fired);
-
-    try testing.expectEqual(@as(types.EntityId, reading_key.entity), context.current_entity);
-    try testing.expectEqual(@as(types.RuleId, 0), context.current_rule);
+    try testing.expectEqual(@as(usize, 2), fired);
 
     {
         var key_buf_alert: [64]u8 = undefined;
@@ -208,9 +259,28 @@ test "E2E: local rule execution writes derived fact back into active memory" {
 
         var store_guard = lww_arc.getMut().lock();
         defer store_guard.deinit();
-        const derived = store_guard.get().get(alert_store_key) orelse return error.MissingDerivedWrite;
-        try testing.expect(derived.value == .Bool);
-        try testing.expectEqual(true, derived.value.Bool);
+        const alert_value = store_guard.get().get(alert_store_key) orelse return error.MissingAlertWrite;
+        try testing.expect(alert_value.value == .Bytes);
+        // Alert is now a component struct serialized as JSON
+        const alert_parsed = try std.json.parseFromSlice(std.json.Value, allocator, alert_value.value.Bytes, .{});
+        defer alert_parsed.deinit();
+        const triggered = alert_parsed.value.object.get("triggered") orelse return error.MissingTriggeredField;
+        try testing.expectEqual(true, triggered.bool);
+    }
+
+    {
+        var key_buf_notif: [64]u8 = undefined;
+        const notification_store_key = try keyBuf("test_ns", notification_key.entity, notification_key.component, &key_buf_notif);
+
+        var store_guard = lww_arc.getMut().lock();
+        defer store_guard.deinit();
+        const notification_value = store_guard.get().get(notification_store_key) orelse return error.MissingNotificationWrite;
+        try testing.expect(notification_value.value == .Bytes);
+        // Notification is now a component struct serialized as JSON
+        const notif_parsed = try std.json.parseFromSlice(std.json.Value, allocator, notification_value.value.Bytes, .{});
+        defer notif_parsed.deinit();
+        const msg = notif_parsed.value.object.get("msg") orelse return error.MissingMsgField;
+        try testing.expectEqualStrings("ALERT: reading exceeded threshold", msg.string);
     }
 
     {

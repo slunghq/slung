@@ -1,5 +1,4 @@
 use slung::prelude::*;
-use slung_macros::{component, rule, source};
 
 // source declares the entity and its components together
 // each component field carries its mapper function
@@ -74,7 +73,6 @@ fn parse_humidity(raw: &[u8]) -> Result<Humidity> {
 )]
 fn on_temperature_update(ctx: &RuleContext) -> Result<()> {
     let temp = ctx.get::<Temperature>(SensorData::temperature)?;
-    eprintln!("temperature update: {:.1}°{}", temp.value, temp.unit);
     Ok(())
 }
 
