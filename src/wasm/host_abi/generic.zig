@@ -65,7 +65,7 @@ pub fn slung_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         .Bool => |b| try std.json.Stringify.value(b, .{}, &out.writer),
         .Int => |i| try std.json.Stringify.value(i, .{}, &out.writer),
         .Float => |f| try std.json.Stringify.value(f, .{}, &out.writer),
-        .Bytes => |b| try std.json.Stringify.value(b, .{}, &out.writer),
+        .Bytes => |b| try out.writer.writeAll(b), // Bytes are already JSON, output as-is
     }
 
     const value_bytes = try out.toOwnedSlice();
@@ -117,8 +117,7 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         .float => |f| parsed_value = .{ .Float = f },
         .string => |s| parsed_value = .{ .Bytes = s },
         else => {
-            try vm.pushOperand(@as(u64, 3));
-            return;
+            parsed_value = .{ .Bytes = value_bytes };
         },
     }
 
