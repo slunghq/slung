@@ -130,3 +130,29 @@ Across nodes, CRDT state replicates per namespace. Wasm modules are portable - a
 + **Edge-native** - designed as a lightweight single binary deployable where data lives
 + **Ontological inference** - causal tagging and priority-based inhibition prevent conflicting rule execution
 + **Tiered source model** - built-in connectors for common sources; raw TCP/UDP escape hatch for anything custom
+
+## Runtime Architecture
+
+### Deployment Model
+
+Slung runs as a single lightweight binary deployable to edge nodes, containerized environments, or traditional servers. A node can host multiple independent namespaces, each with its own fact space, rule set, and source connections. Namespaces are isolated units of execution - state, claims, and dirty work pools do not cross namespace boundaries.
+
+### Network Topology
+
+Nodes communicate via a peer-to-peer gossip protocol. CRDT state replicates asynchronously across nodes within the same namespace, ensuring eventual consistency. Cross-node fact propagation flows through the distributed dirty signal; work execution is opportunistically distributed - any node can execute any rule if it holds the necessary facts and claims are available.
+
+### Port Allocation
+
+The host reserves the following ports for its runtime services:
+
++ **2071** - Peer discovery and lookup service
++ **2072** - Peer binary module registry and exchange
++ **2073** - WebSocket gateway for external clients
++ **2074** - HTTP API and metrics endpoint
++ **2075** - Raw TCP passthrough socket
++ **2076** - Raw UDP passthrough socket
++ **2077** - Module entry point and hot-reload listener
++ **2078** - OpenTelemetry trace and metric ingestion
++ **2079** - Health checks, namespaced state queries, and runtime updates
+
+All ports bind to `0.0.0.0` by default; use environment variables or a config file to restrict to specific interfaces.
