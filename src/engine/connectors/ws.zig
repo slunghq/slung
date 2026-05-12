@@ -22,53 +22,8 @@ pub fn Source(D: type) type {
 
         const Self = @This();
 
-        pub fn write(self: *Self, data: D, payload: []const u8) !void {
+        pub fn write(self: *Self, data: D) !void {
             self.data = data;
-
-            const parsed_generic = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch {
-                return;
-            };
-            defer parsed_generic.deinit();
-
-            var parsed_value: types.Value = undefined;
-            switch (parsed_generic.value) {
-                .bool => |b| parsed_value = .{ .Bool = b },
-                .integer => |i| parsed_value = .{ .Int = i },
-                .float => |f| parsed_value = .{ .Float = f },
-                .string => |s| parsed_value = .{ .Bytes = s },
-                else => parsed_value = .{ .Bytes = payload },
-            }
-
-            const ts = self.clock.*.send();
-            const cause = types.CausalTag{
-                .cause = self.component_id,
-                .entity = self.entity_id,
-                .node = self.node_id,
-            };
-
-            var key_buf: [512]u8 = undefined;
-            const key_str = std.fmt.bufPrintZ(&key_buf, "{s}:{d}:{d}", .{
-                self.namespace,
-                self.entity_id,
-                self.component_id,
-            }) catch return;
-
-            var store_guard = self.lww_store.getMut().lock();
-            defer store_guard.deinit();
-            const store = store_guard.get();
-
-            const accepted = store.put(key_str, ts, parsed_value, cause) catch return;
-
-            if (accepted) {
-                var queue_guard = self.dirty_queue.getMut().lock();
-                defer queue_guard.deinit();
-                const queue = queue_guard.get();
-                const dirty_entry = types.DirtyEntry{
-                    .entity = self.entity_id,
-                    .component = self.component_id,
-                };
-                _ = queue.push(dirty_entry) catch {};
-            }
         }
     };
 }
@@ -97,7 +52,6 @@ pub const WebSocketServerConnection = struct {
         try self.server.routes_mutex.lock(self.server.io);
         defer self.server.routes_mutex.unlock(self.server.io);
         try self.server.routes.put(self.allocator, route_key, source);
-        std.log.info("route registered: {s}", .{route_key});
     }
 
     pub fn close(self: *WebSocketServerConnection, source_key: []const u8) !void {

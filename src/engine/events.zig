@@ -418,18 +418,22 @@ pub const ModuleSession = struct {
     }
 
     fn ingestSourceData(self: *Self, source_key: []const u8, raw_data: []const u8) !void {
-        // source_key format is "SourceName/ComponentType", extract source name
+        // source_key format is "SourceName/ComponentType", extract both parts
         const slash_pos = std.mem.indexOfScalar(u8, source_key, '/') orelse return;
         const source_name = source_key[0..slash_pos];
+        const component_type = source_key[slash_pos + 1 ..];
 
-        // Find all forward entries where source matches this source_key
+        // Find the specific forward entry matching both source and component type
         var iter = self.forward_index.iterator();
         while (iter.next()) |entry| {
             const forward_key = entry.key_ptr.*;
             const forward_entry = entry.value_ptr.*;
 
-            // Check if this component belongs to a source that matches our source name
+            // Check if this entry matches BOTH source name AND component type
             if (!std.mem.eql(u8, forward_entry.source, source_name)) {
+                continue;
+            }
+            if (!std.mem.eql(u8, forward_entry.component_type, component_type)) {
                 continue;
             }
 

@@ -115,14 +115,14 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
                     .client_id = id,
                     .data = msg.data,
                 };
-                try source.?.write(message, msg.data);
+                try source.?.write(message);
             },
             .binary => {
                 const message = Server.ChannelData{
                     .client_id = id,
                     .data = msg.data,
                 };
-                try source.?.write(message, msg.data);
+                try source.?.write(message);
             },
             .close => {
                 std.log.info("Client closed connection", .{});
@@ -138,7 +138,7 @@ fn handleIndex(_: *Server, _: *http.Request, res: *http.Response) !void {
     res.status = .bad_request;
     res.body =
         \\{
-        \\ "status": "ok",
+        \\ "status": "bad request",
         \\ "info": "use websocket binary frames to stream data"
         \\}
     ;
@@ -148,7 +148,7 @@ fn handleHealth(res: *http.Response) !void {
     try res.header("Content-Type", "application/json");
     res.body =
         \\{
-        \\ "status": "ok",
+        \\ "status": "ok"
         \\}
     ;
 }
