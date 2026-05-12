@@ -41,6 +41,7 @@ pub const Server = struct {
     pub fn deinit(self: *Server) void {
         var routes_iter = self.routes.iterator();
         while (routes_iter.next()) |entry| {
+            entry.value_ptr.release(); // Release the Arc
             self.allocator.free(entry.key_ptr.*);
         }
         self.connections.deinit(self.allocator);

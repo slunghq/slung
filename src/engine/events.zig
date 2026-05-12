@@ -334,8 +334,7 @@ pub const ModuleSession = struct {
                     return error.SourceForwardMappingNotFound;
                 };
 
-                const source = try self.allocator.create(WsSource);
-                source.* = .{
+                const source_arc = try Arc(Mutex(WsSource)).init(self.allocator, Mutex(WsSource).init(.{
                     .allocator = self.allocator,
                     .namespace = self.namespace,
                     .node_id = self.node_id,
@@ -345,8 +344,7 @@ pub const ModuleSession = struct {
                     .dirty_queue = self.dirty_queue.clone(),
                     .clock = &self.clock,
                     .data = null,
-                };
-                const source_arc = try Arc(Mutex(WsSource)).init(self.allocator, Mutex(WsSource).init(source.*, self.io));
+                }, self.context.io));
 
                 if (self.ws_connection) |*connection| {
                     try connection.listen(source_key, source_arc);
@@ -360,6 +358,7 @@ pub const ModuleSession = struct {
     }
 
     fn closeConnectors(self: *Self) !void {
+        // De-register all WebSocket sources and release the Arcs
         for (self.ws_sources.items) |route_source| {
             if (self.ws_connection) |*connection| {
                 try connection.close(route_source.source_key);
@@ -368,20 +367,18 @@ pub const ModuleSession = struct {
         }
         self.ws_sources.clearRetainingCapacity();
 
-        var connector_keys_to_remove: std.ArrayList([]const u8) = .empty;
-        defer connector_keys_to_remove.deinit(self.allocator);
+        var keys_to_remove: std.ArrayList([]const u8) = .empty;
+        defer keys_to_remove.deinit(self.allocator);
 
         var iter = self.connectors.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.close(self.allocator);
-            try connector_keys_to_remove.append(self.allocator, entry.key_ptr.*);
+            try keys_to_remove.append(self.allocator, entry.key_ptr.*);
         }
 
-        for (connector_keys_to_remove.items) |key| {
+        for (keys_to_remove.items) |key| {
             _ = self.connectors.remove(key);
-            self.allocator.free(key);
         }
-        self.connectors.deinit();
     }
 
     fn findForwardKeyForRoute(self: *Self, route: []const u8) ?graph_index.ForwardKey {

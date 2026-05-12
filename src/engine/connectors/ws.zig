@@ -62,6 +62,7 @@ pub const WebSocketServerConnection = struct {
         defer self.server.routes_mutex.unlock(self.server.io);
         if (self.server.routes.fetchRemove(route_key)) |kv| {
             self.allocator.free(kv.key);
+            kv.value.release(); // Release the Arc to decrement its ref count
         }
     }
 };
