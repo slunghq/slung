@@ -81,10 +81,6 @@ pub const Server = struct {
 };
 
 fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Response) !void {
-    // Look up the source in a runtime route map stored in context
-    // Send the data received and the client id to the source
-    // Return 404 if not found
-
     var websocket = try res.upgradeWebSocket(req) orelse {
         if (std.mem.endsWith(u8, req.url, "/health")) try handleHealth(res) else try handleIndex(context, req, res);
         return;
@@ -96,14 +92,19 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
 
     const route_path = if (std.mem.startsWith(u8, req.url, "/")) req.url[1..] else req.url;
 
+    var source_arc_opt: ?Arc(Mutex(Source(Server.ChannelData))) = null;
     try context.routes_mutex.lock(context.io);
-    const source = context.routes.get(route_path);
+    if (context.routes.get(route_path)) |s_arc| {
+        source_arc_opt = s_arc.clone();
+    }
     context.routes_mutex.unlock(context.io);
-    if (source == null) {
+
+    const source_arc = source_arc_opt orelse {
         std.log.info("route not registered: {s}", .{route_path});
         websocket.close(.policy_violation, "route not registered") catch {};
         return;
-    }
+    };
+    defer source_arc.release();
 
     while (true) {
         const msg = websocket.receive() catch |err| switch (err) {
@@ -117,7 +118,7 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
                     .client_id = id,
                     .data = msg.data,
                 };
-                const guard = source.?.getMut().lock();
+                const guard = source_arc.getMut().lock();
                 defer guard.deinit();
                 try guard.get().write(message);
             },
@@ -126,7 +127,7 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
                     .client_id = id,
                     .data = msg.data,
                 };
-                const guard = source.?.getMut().lock();
+                const guard = source_arc.getMut().lock();
                 defer guard.deinit();
                 try guard.get().write(message);
             },

@@ -77,7 +77,6 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
             try s.serve();
         }
     }.run, .{&server});
-    // Detached for now; slung is a long-lived process and we don't have a shutdown path yet.
     server_thread.detach();
 
     const config = slung.engine.ModuleConfig{

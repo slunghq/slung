@@ -364,19 +364,24 @@ pub const ModuleSession = struct {
             if (self.ws_connection) |*connection| {
                 try connection.close(route_source.source_key);
             }
-            var guard = route_source.source.getMut().lock();
-            defer guard.deinit();
-            guard.get().lww_store.release();
-            guard.get().dirty_queue.release();
-            self.allocator.destroy(guard.get());
+            route_source.source.release();
         }
         self.ws_sources.clearRetainingCapacity();
+
+        var connector_keys_to_remove: std.ArrayList([]const u8) = .empty;
+        defer connector_keys_to_remove.deinit(self.allocator);
 
         var iter = self.connectors.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.close(self.allocator);
-            _ = self.connectors.remove(entry.key_ptr.*);
+            try connector_keys_to_remove.append(self.allocator, entry.key_ptr.*);
         }
+
+        for (connector_keys_to_remove.items) |key| {
+            _ = self.connectors.remove(key);
+            self.allocator.free(key);
+        }
+        self.connectors.deinit();
     }
 
     fn findForwardKeyForRoute(self: *Self, route: []const u8) ?graph_index.ForwardKey {
@@ -432,13 +437,11 @@ pub const ModuleSession = struct {
         const source_name = source_key[0..slash_pos];
         const component_type = source_key[slash_pos + 1 ..];
 
-        // Find the specific forward entry matching both source and component type
         var iter = self.forward_index.iterator();
         while (iter.next()) |entry| {
             const forward_key = entry.key_ptr.*;
             const forward_entry = entry.value_ptr.*;
 
-            // Check if this entry matches BOTH source name AND component type
             if (!std.mem.eql(u8, forward_entry.source, source_name)) {
                 continue;
             }
@@ -446,7 +449,6 @@ pub const ModuleSession = struct {
                 continue;
             }
 
-            // Invoke mapper to parse raw data
             const input_offset: u32 = 10000;
             const output_offset: u32 = 20000;
             const output_len_offset: u32 = 30000;
@@ -491,7 +493,6 @@ pub const ModuleSession = struct {
                 continue;
             };
 
-            // Write mapped component data to LWW store
             {
                 var store_guard = self.lww_store.getMut().lock();
                 defer store_guard.deinit();
@@ -507,7 +508,6 @@ pub const ModuleSession = struct {
                 };
             }
 
-            // Signal dirty entry to trigger rules
             {
                 var queue_guard = self.dirty_queue.getMut().lock();
                 defer queue_guard.deinit();
