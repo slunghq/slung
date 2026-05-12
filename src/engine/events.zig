@@ -375,6 +375,7 @@ pub const ModuleSession = struct {
         var iter = self.connectors.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.close(self.allocator);
+            _ = self.connectors.remove(entry.key_ptr.*);
         }
     }
 
