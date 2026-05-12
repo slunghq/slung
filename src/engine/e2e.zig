@@ -162,6 +162,7 @@ test "E2E: multi-cycle cascade through rule chain" {
     var wasm_module: *zwasm.WasmModule = undefined;
     var context = Context.init(
         allocator,
+        testing.io,
         lww_arc,
         dirty_queue_arc,
         claim_arc,

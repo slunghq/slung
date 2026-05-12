@@ -109,10 +109,12 @@ pub const Context = struct {
 
     // Allocator for runtime allocations
     allocator: Allocator,
+    io: std.Io,
 
     /// Initialize context with shared resources.
     pub fn init(
         allocator: Allocator,
+        io: std.Io,
         lww_store: Arc(Mutex(LwwRegistry)),
         dirty_queue: Arc(Mutex(DirtyQueue)),
         claim_register: Arc(Mutex(ClaimRegister)),
@@ -124,6 +126,7 @@ pub const Context = struct {
         node_id: types.NodeId,
     ) Self {
         return .{
+            .io = io,
             .lww_store = lww_store,
             .dirty_queue = dirty_queue,
             .claim_register = claim_register,

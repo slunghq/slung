@@ -12,6 +12,7 @@ pub const WorkerId = []const u8;
 /// Identifies the rule or source that triggered a write.
 /// Used to inhibit conflicts and track causality in the inference loop.
 pub const CausalTag = struct {
+    /// could also be RuleId
     cause: ComponentId,
     entity: EntityId,
     node: NodeId,
