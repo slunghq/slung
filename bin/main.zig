@@ -87,7 +87,7 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
         .server = &server,
     };
 
-    var session = try slung.engine.ModuleSession.init(allocator, wasm_bytes, config);
+    var session = try slung.engine.ModuleSession.init(allocator, io, wasm_bytes, config);
     defer session.deinit();
 
     try session.runForever();

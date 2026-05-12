@@ -6,6 +6,8 @@ const StringHashMap = std.StringHashMapUnmanaged;
 const http = @import("dusty");
 const zio = @import("zio");
 const Source = @import("ws.zig").Source;
+const Arc = @import("../../primitives/arc.zig").Arc;
+const Mutex = @import("../../primitives/mutex.zig").Mutex;
 
 pub const Server = struct {
     allocator: Allocator,
@@ -25,7 +27,7 @@ pub const Server = struct {
     pub const Config = struct {
         port: u16,
     };
-    const Routes = StringHashMap(*Source(ChannelData));
+    const Routes = StringHashMap(Arc(Mutex(Source(ChannelData))));
 
     pub fn init(allocator: Allocator, io: std.Io, config: Config) !Server {
         return Server{
@@ -115,14 +117,18 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
                     .client_id = id,
                     .data = msg.data,
                 };
-                try source.?.write(message);
+                const guard = source.?.getMut().lock();
+                defer guard.deinit();
+                try guard.get().write(message);
             },
             .binary => {
                 const message = Server.ChannelData{
                     .client_id = id,
                     .data = msg.data,
                 };
-                try source.?.write(message);
+                const guard = source.?.getMut().lock();
+                defer guard.deinit();
+                try guard.get().write(message);
             },
             .close => {
                 std.log.info("Client closed connection", .{});

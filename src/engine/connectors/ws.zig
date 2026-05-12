@@ -45,7 +45,7 @@ pub const WebSocketServerConnection = struct {
         self.allocator.free(self.namespace);
     }
 
-    pub fn listen(self: *WebSocketServerConnection, source_key: []const u8, source: *Source(Server.ChannelData)) !void {
+    pub fn listen(self: *WebSocketServerConnection, source_key: []const u8, source: Arc(Mutex(Source(Server.ChannelData)))) !void {
         const route_key = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.namespace, source_key });
         errdefer self.allocator.free(route_key);
 

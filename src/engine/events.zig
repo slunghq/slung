@@ -35,6 +35,7 @@ pub const ModuleConfig = struct {
 
 pub const ModuleSession = struct {
     allocator: Allocator,
+    io: std.Io,
     wasm_module: *zwasm.WasmModule,
     namespace: []const u8,
     node_id: []const u8,
@@ -57,11 +58,12 @@ pub const ModuleSession = struct {
     const Self = @This();
     const WsRouteSource = struct {
         source_key: []const u8,
-        source: *WsSource,
+        source: Arc(Mutex(WsSource)),
     };
 
     pub fn init(
         allocator: Allocator,
+        io: std.Io,
         wasm_bytes: []const u8,
         config: ModuleConfig,
     ) !*Self {
@@ -174,6 +176,7 @@ pub const ModuleSession = struct {
         }
 
         session.allocator = allocator;
+        session.io = io;
         session.namespace = try allocator.dupe(u8, config.namespace);
         errdefer allocator.free(session.namespace);
         session.node_id = try allocator.dupe(u8, config.node_id);
@@ -343,12 +346,13 @@ pub const ModuleSession = struct {
                     .clock = &self.clock,
                     .data = null,
                 };
+                const source_arc = try Arc(Mutex(WsSource)).init(self.allocator, Mutex(WsSource).init(source.*, self.io));
 
                 if (self.ws_connection) |*connection| {
-                    try connection.listen(source_key, source);
+                    try connection.listen(source_key, source_arc);
                     try self.ws_sources.append(self.allocator, .{
                         .source_key = source_key,
-                        .source = source,
+                        .source = source_arc,
                     });
                 }
             }
@@ -360,9 +364,11 @@ pub const ModuleSession = struct {
             if (self.ws_connection) |*connection| {
                 try connection.close(route_source.source_key);
             }
-            route_source.source.lww_store.release();
-            route_source.source.dirty_queue.release();
-            self.allocator.destroy(route_source.source);
+            var guard = route_source.source.getMut().lock();
+            defer guard.deinit();
+            guard.get().lww_store.release();
+            guard.get().dirty_queue.release();
+            self.allocator.destroy(guard.get());
         }
         self.ws_sources.clearRetainingCapacity();
 
@@ -393,10 +399,12 @@ pub const ModuleSession = struct {
     fn pollSources(self: *Self) !bool {
         var work_done = false;
         for (self.ws_sources.items) |ws_route| {
-            if (ws_route.source.data) |channel_data| {
+            var guard = ws_route.source.getMut().lock();
+            defer guard.deinit();
+            if (guard.get().data) |channel_data| {
                 work_done = true;
                 try self.ingestSourceData(ws_route.source_key, channel_data.data);
-                ws_route.source.data = null;
+                guard.get().data = null;
             }
         }
 
