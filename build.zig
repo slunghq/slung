@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     benches_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
+    benches_exe.root_module.addImport("zwasm", zwasm.module("zwasm"));
 
     b.installArtifact(benches_exe);
 

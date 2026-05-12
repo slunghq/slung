@@ -2,9 +2,10 @@ const std = @import("std");
 
 const Codspeed = @import("codspeed");
 
-const bench_lww = @import("benches/memory/lww.zig");
-const bench_skiplist = @import("benches/memory/skiplist.zig");
 const bench_table = @import("benches/memory/table.zig");
+const bench_skiplist = @import("benches/memory/skiplist.zig");
+const bench_lww = @import("benches/memory/lww.zig");
+const bench_runtime = @import("benches/runtime/execution.zig");
 pub const LwwRegistry = @import("src/memory/lww.zig").LwwRegistry;
 pub const SkipList = @import("src/memory/skiplist.zig").SkipList;
 pub const ColumnTable = @import("src/memory/table.zig").ColumnTable;
@@ -39,9 +40,14 @@ pub fn main(init: std.process.Init) !void {
         try codspeed.start("memory.skiplist");
         try bench_skiplist.run(allocator, io);
         try codspeed.stop("memory.skiplist");
+
+        try codspeed.start("runtime.execution");
+        try bench_runtime.run(allocator, io);
+        try codspeed.stop("runtime.execution");
     } else {
         try bench_table.run(allocator, io);
         try bench_lww.run(allocator, io);
         try bench_skiplist.run(allocator, io);
+        try bench_runtime.run(allocator, io);
     }
 }
