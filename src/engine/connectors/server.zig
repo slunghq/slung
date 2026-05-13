@@ -5,9 +5,10 @@ const StringHashMap = std.StringHashMapUnmanaged;
 
 const http = @import("dusty");
 const zio = @import("zio");
-const Source = @import("ws.zig").Source;
+
 const Arc = @import("../../primitives/arc.zig").Arc;
 const Mutex = @import("../../primitives/mutex.zig").Mutex;
+const Source = @import("ws.zig").Source;
 
 pub const Server = struct {
     allocator: Allocator,

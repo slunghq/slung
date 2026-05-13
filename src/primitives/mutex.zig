@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+
 const Arc = @import("arc.zig").Arc;
 
 /// Generic mutex with RAII Guard pattern.

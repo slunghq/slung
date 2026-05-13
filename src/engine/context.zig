@@ -12,15 +12,17 @@
 //! + Claim checks for duplicate prevention
 
 const std = @import("std");
-const zwasm = @import("zwasm");
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
 
-const types = @import("../types.zig");
-const Arc = @import("../primitives/arc.zig").Arc;
-const Mutex = @import("../primitives/mutex.zig").Mutex;
-const Hlc = @import("../primitives/hlc.zig").Hlc;
+const zwasm = @import("zwasm");
+
 const LwwRegistry = @import("../memory/lww.zig").LwwRegistry;
+const Arc = @import("../primitives/arc.zig").Arc;
+const Hlc = @import("../primitives/hlc.zig").Hlc;
+const Mutex = @import("../primitives/mutex.zig").Mutex;
 const DirtyQueue = @import("../queue.zig").DirtyQueue;
+const types = @import("../types.zig");
 const graph_index = @import("../wasm/index.zig");
 
 /// Claim register: tracks (RuleId, EntityId) pairs currently executing.
@@ -151,8 +153,6 @@ pub const Context = struct {
 };
 
 // Tests
-const testing = std.testing;
-
 test "ClaimRegister: acquire and release" {
     var reg = ClaimRegister.init();
     defer reg.deinit(testing.allocator);

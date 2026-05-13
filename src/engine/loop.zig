@@ -17,14 +17,13 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
-const types = @import("../types.zig");
-const context_mod = @import("./context.zig");
-const graph_index = @import("../wasm/index.zig");
 const queue_mod = @import("../queue.zig");
-
+const types = @import("../types.zig");
+const DirtyEntry = types.DirtyEntry;
+const graph_index = @import("../wasm/index.zig");
+const context_mod = @import("./context.zig");
 const Context = context_mod.Context;
 const ClaimRegister = context_mod.ClaimRegister;
-const DirtyEntry = types.DirtyEntry;
 
 /// Rule dispatcher interface — allows mocking Wasm invocation in tests.
 pub const RuleDispatcher = struct {

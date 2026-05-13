@@ -1,30 +1,31 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+const zio = @import("zio");
 const zwasm = @import("zwasm");
 
-const types = @import("../types.zig");
-const queue_mod = @import("../queue.zig");
-const wasm_host = @import("../wasm/host.zig");
-const wasm_wire = @import("../wasm/wire.zig");
-const graph_index = @import("../wasm/index.zig");
-const loop_mod = @import("loop.zig");
-const context_mod = @import("context.zig");
-const connectors_mod = @import("connectors.zig");
-const ws_mod = @import("connectors/ws.zig");
-const server_mod = @import("connectors/server.zig");
-const Arc = @import("../primitives/arc.zig").Arc;
-const Mutex = @import("../primitives/mutex.zig").Mutex;
-const Hlc = @import("../primitives/hlc.zig").Hlc;
 const LwwRegistry = @import("../memory/lww.zig").LwwRegistry;
-
-const Context = context_mod.Context;
-const ClaimRegister = context_mod.ClaimRegister;
-const InferenceLoop = loop_mod.InferenceLoop;
-const RuleDispatcher = loop_mod.RuleDispatcher;
+const Arc = @import("../primitives/arc.zig").Arc;
+const Hlc = @import("../primitives/hlc.zig").Hlc;
+const Mutex = @import("../primitives/mutex.zig").Mutex;
+const queue_mod = @import("../queue.zig");
+const types = @import("../types.zig");
+const wasm_host = @import("../wasm/host.zig");
+const graph_index = @import("../wasm/index.zig");
+const wasm_wire = @import("../wasm/wire.zig");
+const server_mod = @import("connectors/server.zig");
+const ws_mod = @import("connectors/ws.zig");
+const connectors_mod = @import("connectors.zig");
 const Connector = connectors_mod.Connector;
 const SourceConfig = connectors_mod.SourceConfig;
-const WsSource = ws_mod.Source(server_mod.Server.ChannelData);
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
+const ClaimRegister = context_mod.ClaimRegister;
+const loop_mod = @import("loop.zig");
+const InferenceLoop = loop_mod.InferenceLoop;
+const RuleDispatcher = loop_mod.RuleDispatcher;
 
-const Allocator = std.mem.Allocator;
+const WsSource = ws_mod.Source(server_mod.Server.ChannelData);
 
 pub const ModuleConfig = struct {
     io: std.Io,
@@ -310,7 +311,7 @@ pub const ModuleSession = struct {
 
         while (true) {
             if (!try self.step()) {
-                try self.context.io.sleep(.{ .nanoseconds = 10 }, .awake);
+                try zio.yield();
             }
         }
     }
@@ -325,6 +326,7 @@ pub const ModuleSession = struct {
                 self.allocator,
                 config,
             );
+            errdefer connector.close(self.allocator);
 
             try self.connectors.put(source_key, connector);
 
@@ -351,6 +353,7 @@ pub const ModuleSession = struct {
                     .clock = &self.clock,
                     .data = null,
                 }, self.context.io));
+                errdefer source_arc.release();
 
                 if (self.ws_connection) |*connection| {
                     try connection.listen(source_key, source_arc);

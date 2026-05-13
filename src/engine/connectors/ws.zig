@@ -1,12 +1,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Server = @import("server.zig").Server;
-const types = @import("../../types.zig");
-const Arc = @import("../../primitives/arc.zig").Arc;
-const Mutex = @import("../../primitives/mutex.zig").Mutex;
-const Hlc = @import("../../primitives/hlc.zig").Hlc;
+
 const LwwRegistry = @import("../../memory/lww.zig").LwwRegistry;
+const Arc = @import("../../primitives/arc.zig").Arc;
+const Hlc = @import("../../primitives/hlc.zig").Hlc;
+const Mutex = @import("../../primitives/mutex.zig").Mutex;
 const DirtyQueue = @import("../../queue.zig").DirtyQueue;
+const types = @import("../../types.zig");
+const Server = @import("server.zig").Server;
 
 pub fn Source(D: type) type {
     return struct {

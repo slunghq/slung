@@ -1,10 +1,12 @@
 const std = @import("std");
+
 const slung = @import("slung");
+const zio = @import("zio");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    var rt = try @import("zio").Runtime.init(allocator, .{});
+    var rt = try zio.Runtime.init(allocator, .{});
     defer rt.deinit();
     const io = rt.io();
 
@@ -70,17 +72,19 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
     defer allocator.free(wasm_bytes);
 
     const server = try allocator.create(slung.engine.Server);
-    errdefer allocator.destroy(server);
+    defer server.deinit();
+    defer allocator.destroy(server);
+
     server.* = try slung.engine.Server.init(allocator, io, .{ .port = ws_port });
 
-    var server_thread = try std.Thread.spawn(.{}, struct {
-        fn run(s: *slung.engine.Server, alloc: std.mem.Allocator) !void {
-            defer s.deinit();
-            defer alloc.destroy(s);
+    var group: zio.Group = .init;
+    defer group.cancel();
+
+    try group.spawn(struct {
+        fn run(s: *slung.engine.Server) !void {
             try s.serve();
         }
-    }.run, .{ server, allocator });
-    server_thread.detach();
+    }.run, .{server});
 
     const config = slung.engine.ModuleConfig{
         .io = io,
@@ -89,10 +93,16 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
         .server = server,
     };
 
-    var session = try slung.engine.ModuleSession.init(allocator, io, wasm_bytes, config);
-    defer session.deinit();
+    const session = try slung.engine.ModuleSession.init(allocator, io, wasm_bytes, config);
 
-    try session.runForever();
+    try group.spawn(struct {
+        fn run(s: *slung.engine.ModuleSession) !void {
+            try s.runForever();
+            defer s.deinit();
+        }
+    }.run, .{session});
+
+    try group.wait();
 }
 
 fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]const u8 {

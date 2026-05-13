@@ -2,24 +2,24 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
 const zwasm = @import("zwasm");
 
-const types = @import("../../src/types.zig");
-const queue_mod = @import("../../src/queue.zig");
-const wasm_host = @import("../../src/wasm/host.zig");
-const wasm_wire = @import("../../src/wasm/wire.zig");
-const graph_index = @import("../../src/wasm/index.zig");
-const loop_mod = @import("../../src/engine/loop.zig");
 const context_mod = @import("../../src/engine/context.zig");
-const Arc = @import("../../src/primitives/arc.zig").Arc;
-const Mutex = @import("../../src/primitives/mutex.zig").Mutex;
-const Hlc = @import("../../src/primitives/hlc.zig").Hlc;
-const LwwRegistry = @import("../../src/memory/lww.zig").LwwRegistry;
-
 const Context = context_mod.Context;
 const ClaimRegister = context_mod.ClaimRegister;
+const loop_mod = @import("../../src/engine/loop.zig");
 const InferenceLoop = loop_mod.InferenceLoop;
 const RuleDispatcher = loop_mod.RuleDispatcher;
+const LwwRegistry = @import("../../src/memory/lww.zig").LwwRegistry;
+const Arc = @import("../../src/primitives/arc.zig").Arc;
+const Hlc = @import("../../src/primitives/hlc.zig").Hlc;
+const Mutex = @import("../../src/primitives/mutex.zig").Mutex;
+const queue_mod = @import("../../src/queue.zig");
+const types = @import("../../src/types.zig");
+const wasm_host = @import("../../src/wasm/host.zig");
+const graph_index = @import("../../src/wasm/index.zig");
+const wasm_wire = @import("../../src/wasm/wire.zig");
 
 const n_iters: usize = 100_000;
 

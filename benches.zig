@@ -2,9 +2,9 @@ const std = @import("std");
 
 const Codspeed = @import("codspeed");
 
-const bench_table = @import("benches/memory/table.zig");
-const bench_skiplist = @import("benches/memory/skiplist.zig");
 const bench_lww = @import("benches/memory/lww.zig");
+const bench_skiplist = @import("benches/memory/skiplist.zig");
+const bench_table = @import("benches/memory/table.zig");
 const bench_runtime = @import("benches/runtime/execution.zig");
 pub const LwwRegistry = @import("src/memory/lww.zig").LwwRegistry;
 pub const SkipList = @import("src/memory/skiplist.zig").SkipList;
