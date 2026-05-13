@@ -49,9 +49,12 @@ pub const WebSocketServerConnection = struct {
         const route_key = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.namespace, source_key });
         errdefer self.allocator.free(route_key);
 
+        const source_clone = source.clone();
+        errdefer source_clone.release();
+
         try self.server.routes_mutex.lock(self.server.io);
         defer self.server.routes_mutex.unlock(self.server.io);
-        try self.server.routes.put(self.allocator, route_key, source);
+        try self.server.routes.put(self.allocator, route_key, source_clone);
     }
 
     pub fn close(self: *WebSocketServerConnection, source_key: []const u8) !void {

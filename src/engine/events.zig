@@ -54,6 +54,7 @@ pub const ModuleSession = struct {
 
     context: Context,
     clock: Hlc,
+    host_fns: ?[]const zwasm.HostFnEntry = null,
 
     const Self = @This();
     const WsRouteSource = struct {
@@ -132,6 +133,7 @@ pub const ModuleSession = struct {
 
         const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&session.context));
         errdefer allocator.free(env_imports.source.host_fns);
+        session.host_fns = env_imports.source.host_fns;
 
         session.wasm_module = try zwasm.WasmModule.loadWasiWithImports(
             allocator,
@@ -248,6 +250,10 @@ pub const ModuleSession = struct {
 
         self.wasm_module.deinit();
 
+        if (self.host_fns) |host_fns| {
+            self.allocator.free(host_fns);
+        }
+
         self.allocator.free(self.namespace);
         self.allocator.free(self.node_id);
         self.allocator.destroy(self);
@@ -348,11 +354,14 @@ pub const ModuleSession = struct {
 
                 if (self.ws_connection) |*connection| {
                     try connection.listen(source_key, source_arc);
+                    const source_arc_clone = source_arc.clone();
+                    errdefer source_arc_clone.release();
                     try self.ws_sources.append(self.allocator, .{
                         .source_key = source_key,
-                        .source = source_arc,
+                        .source = source_arc_clone,
                     });
                 }
+                source_arc.release();
             }
         }
     }

@@ -69,21 +69,24 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
     const wasm_bytes = try readFile(allocator, io, module_path_resolved);
     defer allocator.free(wasm_bytes);
 
-    var server = try slung.engine.Server.init(allocator, io, .{ .port = ws_port });
-    defer server.deinit();
+    const server = try allocator.create(slung.engine.Server);
+    errdefer allocator.destroy(server);
+    server.* = try slung.engine.Server.init(allocator, io, .{ .port = ws_port });
 
     var server_thread = try std.Thread.spawn(.{}, struct {
-        fn run(s: *slung.engine.Server) !void {
+        fn run(s: *slung.engine.Server, alloc: std.mem.Allocator) !void {
+            defer s.deinit();
+            defer alloc.destroy(s);
             try s.serve();
         }
-    }.run, .{&server});
+    }.run, .{ server, allocator });
     server_thread.detach();
 
     const config = slung.engine.ModuleConfig{
         .io = io,
         .namespace = namespace,
         .node_id = node_id,
-        .server = &server,
+        .server = server,
     };
 
     var session = try slung.engine.ModuleSession.init(allocator, io, wasm_bytes, config);
