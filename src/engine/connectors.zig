@@ -39,6 +39,8 @@ pub const WebSocketConnector = struct {
             .remote_url = if (config.remote_url) |url| try allocator.dupe(u8, url) else null,
             .mode = if (config.remote_url != null) .client else .server,
         };
+        errdefer allocator.destroy(connector);
+        errdefer allocator.free(connector.source_key);
 
         return .{
             .ptr = connector,
@@ -92,8 +94,12 @@ pub const NATSConnector = struct {
         connector.* = .{
             .allocator = allocator,
             .source_key = try allocator.dupe(u8, config.source_key),
+            // TODO: propagate some error from here as misconf could crash entire runtime
+            // in a multi-instance system
             .remote_url = try allocator.dupe(u8, config.remote_url.?),
         };
+        errdefer allocator.destroy(connector);
+        errdefer allocator.free(connector.source_key);
 
         return .{
             .ptr = connector,
@@ -138,8 +144,12 @@ pub const TCPConnector = struct {
         connector.* = .{
             .allocator = allocator,
             .source_key = try allocator.dupe(u8, config.source_key),
+            // TODO: propagate some error from here as misconf could crash entire runtime
+            // in a multi-instance system
             .remote_url = try allocator.dupe(u8, config.remote_url.?),
         };
+        errdefer allocator.destroy(connector);
+        errdefer allocator.free(connector.source_key);
 
         return .{
             .ptr = connector,

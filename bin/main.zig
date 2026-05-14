@@ -94,14 +94,16 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
     };
 
     const session = try slung.engine.ModuleSession.init(allocator, io, wasm_bytes, config);
-    errdefer session.deinit();
+    var spawned_session = false;
+    errdefer if (!spawned_session) session.deinit();
 
     try group.spawn(struct {
-        fn run(s: *slung.engine.ModuleSession) !void {
+        fn run(s: *slung.engine.ModuleSession, owned: *bool) !void {
             defer s.deinit();
+            owned.* = true;
             try s.runForever();
         }
-    }.run, .{session});
+    }.run, .{ session, &spawned_session });
 
     try group.wait();
 }
