@@ -1,21 +1,21 @@
 const std = @import("std");
 const testing = std.testing;
+
 const zwasm = @import("zwasm");
 
-const types = @import("../types.zig");
-const queue_mod = @import("../queue.zig");
-const wasm_host = @import("../wasm/host.zig");
-const wasm_wire = @import("../wasm/wire.zig");
-const graph_index = @import("../wasm/index.zig");
-const loop_mod = @import("loop.zig");
-const context_mod = @import("context.zig");
-const Arc = @import("../primitives/arc.zig").Arc;
-const Mutex = @import("../primitives/mutex.zig").Mutex;
-const Hlc = @import("../primitives/hlc.zig").Hlc;
 const LwwRegistry = @import("../memory/lww.zig").LwwRegistry;
-
+const Arc = @import("../primitives/arc.zig").Arc;
+const Hlc = @import("../primitives/hlc.zig").Hlc;
+const Mutex = @import("../primitives/mutex.zig").Mutex;
+const queue_mod = @import("../queue.zig");
+const types = @import("../types.zig");
+const wasm_host = @import("../wasm/host.zig");
+const graph_index = @import("../wasm/index.zig");
+const wasm_wire = @import("../wasm/wire.zig");
+const context_mod = @import("context.zig");
 const Context = context_mod.Context;
 const ClaimRegister = context_mod.ClaimRegister;
+const loop_mod = @import("loop.zig");
 const InferenceLoop = loop_mod.InferenceLoop;
 const RuleDispatcher = loop_mod.RuleDispatcher;
 
@@ -162,6 +162,7 @@ test "E2E: multi-cycle cascade through rule chain" {
     var wasm_module: *zwasm.WasmModule = undefined;
     var context = Context.init(
         allocator,
+        testing.io,
         lww_arc,
         dirty_queue_arc,
         claim_arc,

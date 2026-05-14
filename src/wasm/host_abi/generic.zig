@@ -7,17 +7,19 @@
 //! + slung_yield: cooperative suspension
 
 const std = @import("std");
-const zwasm = @import("zwasm");
-const types = @import("../../types.zig");
-const context_mod = @import("../../engine/context.zig");
-const Arc = @import("../../primitives/arc.zig").Arc;
-const Mutex = @import("../../primitives/mutex.zig").Mutex;
-const LwwRegistry = @import("../../memory/lww.zig").LwwRegistry;
-const DirtyQueue = @import("../../queue.zig").DirtyQueue;
-const Hlc = @import("../../primitives/hlc.zig").Hlc;
-
-const Context = context_mod.Context;
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
+
+const zwasm = @import("zwasm");
+
+const context_mod = @import("../../engine/context.zig");
+const Context = context_mod.Context;
+const LwwRegistry = @import("../../memory/lww.zig").LwwRegistry;
+const Arc = @import("../../primitives/arc.zig").Arc;
+const Hlc = @import("../../primitives/hlc.zig").Hlc;
+const Mutex = @import("../../primitives/mutex.zig").Mutex;
+const DirtyQueue = @import("../../queue.zig").DirtyQueue;
+const types = @import("../../types.zig");
 
 /// slung_get(entity_id: i32, component_id: i32) -> (ptr: i32, len: i32)
 ///
@@ -248,8 +250,6 @@ pub fn appendHostFunctions(
         .context = context,
     });
 }
-
-const testing = std.testing;
 
 test "slung_set: host function is registered" {
     const allocator = testing.allocator;

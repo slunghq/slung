@@ -22,6 +22,8 @@ Normalises heterogeneous external sources into the ECS model. The host ships bui
 
 For sources not covered by built-ins, the host exposes raw TCP and UDP primitives as an escape hatch. The SDK can build any protocol on top of these within the module.
 
+Incoming WebSocket frames are ingested by the host: mapper invocation (when wired) produces component JSON which is written to active memory (LWW) and signals dirty, triggering the inference loop.
+
 The entity mapper translates incoming data from each source into EntityId + ComponentId pairs. The capability graph tracks which rules watch which components across the entire system - it is the precomputed index that makes the inference loop efficient. It is built once at module registration time and never scanned at runtime.
 
 ### Module System and ABI
@@ -34,7 +36,7 @@ Modules are Wasm binaries. The host discovers everything it needs to know about 
 
 **Rule descriptors** (`__slung_rule_<Name>_descriptor`) declare a rule: its watch list of ComponentIds, its priority, and a callable entrypoint (`__slung_rule_<Name>`) the host invokes when dispatching. The host populates the capability graph from the watch list and registers the rule in the rule registry.
 
-The host ABI exposes two tiers:
+The host API exposes two tiers. Built-in connectors are primarily host-managed (modules do not perform I/O directly); guest-facing connector ABI entrypoints may exist as an optional escape hatch or for future connector-in-guest experimentation.
 
 *Built-in connectors:*
 ```

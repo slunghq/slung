@@ -1,11 +1,13 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+
 const zwasm = @import("zwasm");
+
+const types = @import("../types.zig");
+const graph_index = @import("index.zig");
 const host = @import("host.zig");
 const module = @import("module.zig");
 const GraphBuilder = module.GraphBuilder;
-const Allocator = std.mem.Allocator;
-const types = @import("../types.zig");
-const graph_index = @import("index.zig");
 
 pub fn wire(
     allocator: Allocator,

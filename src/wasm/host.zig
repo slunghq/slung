@@ -8,13 +8,14 @@
 //! + Queue: message brokers (slung_nats_*, slung_kafka_*)
 
 const std = @import("std");
+
 const zwasm = @import("zwasm");
 
 pub const generic = @import("host_abi/generic.zig");
 pub const http = @import("host_abi/http.zig");
-pub const ws = @import("host_abi/ws.zig");
-pub const tcp_udp = @import("host_abi/tcp_udp.zig");
 pub const queue = @import("host_abi/queue.zig");
+pub const tcp_udp = @import("host_abi/tcp_udp.zig");
+pub const ws = @import("host_abi/ws.zig");
 
 fn buildHostImports(allocator: std.mem.Allocator, context: usize) !std.ArrayList(zwasm.HostFnEntry) {
     var host_fns: std.ArrayList(zwasm.HostFnEntry) = .empty;

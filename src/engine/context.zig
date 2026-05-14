@@ -12,15 +12,17 @@
 //! + Claim checks for duplicate prevention
 
 const std = @import("std");
-const zwasm = @import("zwasm");
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
 
-const types = @import("../types.zig");
-const Arc = @import("../primitives/arc.zig").Arc;
-const Mutex = @import("../primitives/mutex.zig").Mutex;
-const Hlc = @import("../primitives/hlc.zig").Hlc;
+const zwasm = @import("zwasm");
+
 const LwwRegistry = @import("../memory/lww.zig").LwwRegistry;
+const Arc = @import("../primitives/arc.zig").Arc;
+const Hlc = @import("../primitives/hlc.zig").Hlc;
+const Mutex = @import("../primitives/mutex.zig").Mutex;
 const DirtyQueue = @import("../queue.zig").DirtyQueue;
+const types = @import("../types.zig");
 const graph_index = @import("../wasm/index.zig");
 
 /// Claim register: tracks (RuleId, EntityId) pairs currently executing.
@@ -109,10 +111,12 @@ pub const Context = struct {
 
     // Allocator for runtime allocations
     allocator: Allocator,
+    io: std.Io,
 
     /// Initialize context with shared resources.
     pub fn init(
         allocator: Allocator,
+        io: std.Io,
         lww_store: Arc(Mutex(LwwRegistry)),
         dirty_queue: Arc(Mutex(DirtyQueue)),
         claim_register: Arc(Mutex(ClaimRegister)),
@@ -124,6 +128,7 @@ pub const Context = struct {
         node_id: types.NodeId,
     ) Self {
         return .{
+            .io = io,
             .lww_store = lww_store,
             .dirty_queue = dirty_queue,
             .claim_register = claim_register,
@@ -148,8 +153,6 @@ pub const Context = struct {
 };
 
 // Tests
-const testing = std.testing;
-
 test "ClaimRegister: acquire and release" {
     var reg = ClaimRegister.init();
     defer reg.deinit(testing.allocator);

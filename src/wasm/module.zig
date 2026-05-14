@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const testing = std.testing;
 
 const types = @import("../types.zig");
 const graph_index = @import("index.zig");
@@ -384,8 +385,6 @@ pub const GraphBuilder = struct {
         return null;
     }
 };
-
-const testing = std.testing;
 
 test "GraphBuilder: phase 1 source registration" {
     var builder = GraphBuilder.init(testing.allocator, "test_ns", "module.wasm");

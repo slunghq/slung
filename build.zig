@@ -37,12 +37,22 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const dusty = b.dependency("dusty", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // dusty internally imports `zio`, so ensure the module has it in scope.
+    dusty.module("dusty").addImport("zio", zio.module("zio"));
+
     exe.root_module.addImport("zio", zio.module("zio"));
     exe.root_module.addImport("zwasm", zwasm.module("zwasm"));
     exe.root_module.addImport("toml", toml.module("toml"));
+    exe.root_module.addImport("dusty", dusty.module("dusty"));
     mod.addImport("zio", zio.module("zio"));
     mod.addImport("zwasm", zwasm.module("zwasm"));
     mod.addImport("toml", toml.module("toml"));
+    mod.addImport("dusty", dusty.module("dusty"));
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
@@ -75,6 +85,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     benches_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
+    benches_exe.root_module.addImport("zwasm", zwasm.module("zwasm"));
 
     b.installArtifact(benches_exe);
 

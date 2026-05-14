@@ -34,8 +34,8 @@
     // internet connectivity.
     .dependencies = .{
         .zio = .{
-            .url = "git+https://github.com/lalinsky/zio?ref=v0.8.2#3ac234eae165177cd75742f922851dc5d373fd12",
-            .hash = "zio-0.8.2-xHbVVC5jGAAYUMZd_BW5eT-HJb_lf-LCGj4PaLOeEkA2",
+            .url = "git+https://github.com/lalinsky/zio?ref=v0.11.0#53abdf9ce5e6279e29703a39180ce1cedd8ac4ca",
+            .hash = "zio-0.11.0-xHbVVEqQGwDz0MYoQ0j7Ke0Y9E_iZVe5eLAWK4gd9U0i",
         },
         .codspeed = .{
             .url = "git+https://github.com/notxorand/codspeed-zig#1bfd9391e7652ad96e10219f93befa1f9004b09d",
@@ -48,6 +48,10 @@
         .zwasm = .{
             .url = "https://github.com/clojurewasm/zwasm/archive/refs/tags/v1.10.0.tar.gz",
             .hash = "zwasm-1.10.0-IBbzF3p4KgCAk17UOA6b8EER1zTaXmLLNkda9a_R5U2g",
+        },
+        .dusty = .{
+            .url = "git+https://github.com/lalinsky/dusty#283abefe0f53730d980ac8ff2bab22b3d2226765",
+            .hash = "dusty-0.1.0-Qdw7RkP-CQBDmuJQdmomR-GaZuCFLYIGbRR6dUjfjWXD",
         },
     },
     .paths = .{
