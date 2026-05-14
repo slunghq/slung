@@ -72,8 +72,8 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
     defer allocator.free(wasm_bytes);
 
     const server = try allocator.create(slung.engine.Server);
-    defer server.deinit();
     defer allocator.destroy(server);
+    defer server.deinit();
 
     server.* = try slung.engine.Server.init(allocator, io, .{ .port = ws_port });
 
@@ -94,11 +94,12 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
     };
 
     const session = try slung.engine.ModuleSession.init(allocator, io, wasm_bytes, config);
+    errdefer session.deinit();
 
     try group.spawn(struct {
         fn run(s: *slung.engine.ModuleSession) !void {
-            try s.runForever();
             defer s.deinit();
+            try s.runForever();
         }
     }.run, .{session});
 
@@ -110,6 +111,7 @@ fn readFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]const
     defer file.close(io);
     const stat = try file.stat(io);
     const data = try allocator.alloc(u8, stat.size);
+    errdefer allocator.free(data);
     var reader = file.reader(io, &[_]u8{});
     try reader.interface.readSliceAll(data);
     return data;
