@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 + Connector abstraction (`Arc<Mutex<DirtyQueue>>`, `Arc<Mutex<LwwRegistry>>`) for thread-safe shared state
-+ WebSocket connector skeleton with TODO tasks for Milestone B
-+ NATS and TCP connectors with TODO tasks for Milestone B
++ WebSocket connector 
++ Redis, NATS and TCP/UDP connectors skeleton
 + `ModuleSession` for managing module lifecycle (init, deinit, run)
 + `ModuleConfig` for configuring sources and runtime parameters
 + Event loop supervisor pattern with source polling and inference dispatch
