@@ -180,6 +180,54 @@ pub const TCPConnector = struct {
     };
 };
 
+pub const RedisConnector = struct {
+    allocator: Allocator,
+    source_key: []const u8,
+    remote_url: []const u8,
+
+    pub fn open(allocator: Allocator, config: SourceConfig) !Connector {
+        if (config.remote_url == null) {
+            return error.RedisRequiresRemoteUrl;
+        }
+
+        const connector = try allocator.create(RedisConnector);
+        connector.* = .{
+            .allocator = allocator,
+            .source_key = try allocator.dupe(u8, config.source_key),
+            .remote_url = try allocator.dupe(u8, config.remote_url.?),
+        };
+        errdefer allocator.destroy(connector);
+        errdefer allocator.free(connector.source_key);
+
+        return .{
+            .ptr = connector,
+            .vtable = &vtable,
+        };
+    }
+
+    fn nextImpl(ptr: *anyopaque, allocator: Allocator) !?[]u8 {
+        const self: *RedisConnector = @ptrCast(@alignCast(ptr));
+        _ = self;
+        _ = allocator;
+        // TODO: Implement Redis subscriber polling
+        // Subscribe to channel derived from source_key
+        // Return raw message bytes or null
+        return null;
+    }
+
+    fn closeImpl(ptr: *anyopaque, allocator: Allocator) void {
+        const self: *RedisConnector = @ptrCast(@alignCast(ptr));
+        allocator.free(self.source_key);
+        allocator.free(self.remote_url);
+        allocator.destroy(self);
+    }
+
+    const vtable = Connector.VTable{
+        .next = nextImpl,
+        .close = closeImpl,
+    };
+};
+
 pub fn openConnector(
     allocator: Allocator,
     config: SourceConfig,
@@ -190,6 +238,8 @@ pub fn openConnector(
         return try NATSConnector.open(allocator, config);
     } else if (std.mem.eql(u8, config.connector_type, "tcp")) {
         return try TCPConnector.open(allocator, config);
+    } else if (std.mem.eql(u8, config.connector_type, "redis")) {
+        return try RedisConnector.open(allocator, config);
     } else {
         return error.UnknownConnectorType;
     }
