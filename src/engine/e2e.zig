@@ -191,34 +191,46 @@ test "E2E: multi-cycle cascade through rule chain" {
     try testing.expectEqual(@as(usize, 3), forward.count());
     try testing.expectEqual(@as(usize, 2), reverse.count());
 
-    const rule0 = reverse.get(0) orelse return error.MissingRule0;
-    const rule1 = reverse.get(1) orelse return error.MissingRule1;
+    var reading_key_opt: ?graph_index.ForwardKey = null;
+    var reading_mapper_opt: ?[]const u8 = null;
+    var alert_key_opt: ?graph_index.ForwardKey = null;
+    {
+        var iter = forward.iterator();
+        while (iter.next()) |entry| {
+            const fwd = entry.value_ptr.*;
+            if (std.mem.eql(u8, fwd.source, "LocalExec") and std.mem.eql(u8, fwd.component_type, "Reading")) {
+                reading_key_opt = entry.key_ptr.*;
+                reading_mapper_opt = fwd.mapper;
+            } else if (std.mem.eql(u8, fwd.source, "LocalExec") and std.mem.eql(u8, fwd.component_type, "Alert")) {
+                alert_key_opt = entry.key_ptr.*;
+            }
+        }
+    }
 
-    try testing.expect(rule0.watch.len >= 1);
-    try testing.expect(rule1.watch.len >= 1);
-    const reading_key = rule1.watch[0];
-    const alert_key = rule0.watch[0];
+    const reading_key = reading_key_opt orelse return error.MissingReadingForward;
+    const reading_mapper = reading_mapper_opt orelse return error.MissingReadingMapper;
+    const alert_key = alert_key_opt orelse return error.MissingAlertForward;
 
     var notification_key_opt: ?graph_index.ForwardKey = null;
-    var iter = forward.iterator();
-    while (iter.next()) |entry| {
-        if (entry.key_ptr.component != reading_key.component and
-            entry.key_ptr.component != alert_key.component)
-        {
-            notification_key_opt = entry.key_ptr.*;
-            break;
+    {
+        var iter = forward.iterator();
+        while (iter.next()) |entry| {
+            if (entry.key_ptr.component != reading_key.component and
+                entry.key_ptr.component != alert_key.component)
+            {
+                notification_key_opt = entry.key_ptr.*;
+                break;
+            }
         }
     }
     const notification_key = notification_key_opt orelse return error.MissingNotificationComponent;
-
-    const reading_forward = forward.get(reading_key) orelse return error.MissingReadingForward;
 
     {
         var key_buf_reading: [64]u8 = undefined;
         const reading_store_key = try keyBuf("test_ns", reading_key.entity, reading_key.component, &key_buf_reading);
 
-        const raw_input = "42.0";
-        const mapped = try invokeMapper(wasm_module, allocator, reading_forward.mapper, raw_input);
+        const raw_input = "{\"value\": 42.0}";
+        const mapped = try invokeMapper(wasm_module, allocator, reading_mapper, raw_input);
         defer allocator.free(mapped);
 
         var store_guard = lww_arc.getMut().lock();

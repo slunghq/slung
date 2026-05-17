@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 
 pub const SourceConfig = struct {
     connector_type: []const u8,
-    source_key: []const u8,
+    route_path: ?[]const u8 = null,
     remote_url: ?[]const u8 = null,
 };
 
@@ -27,20 +27,20 @@ pub const Connector = struct {
 
 pub const WebSocketConnector = struct {
     allocator: Allocator,
-    source_key: []const u8,
+    source_name: []const u8,
     remote_url: ?[]const u8,
     mode: enum { server, client },
 
-    pub fn open(allocator: Allocator, config: SourceConfig) !Connector {
+    pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
         const connector = try allocator.create(WebSocketConnector);
         connector.* = .{
             .allocator = allocator,
-            .source_key = try allocator.dupe(u8, config.source_key),
+            .source_name = try allocator.dupe(u8, source_name),
             .remote_url = if (config.remote_url) |url| try allocator.dupe(u8, url) else null,
             .mode = if (config.remote_url != null) .client else .server,
         };
         errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_key);
+        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -67,7 +67,7 @@ pub const WebSocketConnector = struct {
 
     fn closeImpl(ptr: *anyopaque, allocator: Allocator) void {
         const self: *WebSocketConnector = @ptrCast(@alignCast(ptr));
-        allocator.free(self.source_key);
+        allocator.free(self.source_name);
         if (self.remote_url) |url| {
             allocator.free(url);
         }
@@ -82,10 +82,10 @@ pub const WebSocketConnector = struct {
 
 pub const NATSConnector = struct {
     allocator: Allocator,
-    source_key: []const u8,
+    source_name: []const u8,
     remote_url: []const u8,
 
-    pub fn open(allocator: Allocator, config: SourceConfig) !Connector {
+    pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
         if (config.remote_url == null) {
             return error.NATSRequiresRemoteUrl;
         }
@@ -93,13 +93,13 @@ pub const NATSConnector = struct {
         const connector = try allocator.create(NATSConnector);
         connector.* = .{
             .allocator = allocator,
-            .source_key = try allocator.dupe(u8, config.source_key),
+            .source_name = try allocator.dupe(u8, source_name),
             // TODO: propagate some error from here as misconf could crash entire runtime
             // in a multi-instance system
             .remote_url = try allocator.dupe(u8, config.remote_url.?),
         };
         errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_key);
+        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -119,7 +119,7 @@ pub const NATSConnector = struct {
 
     fn closeImpl(ptr: *anyopaque, allocator: Allocator) void {
         const self: *NATSConnector = @ptrCast(@alignCast(ptr));
-        allocator.free(self.source_key);
+        allocator.free(self.source_name);
         allocator.free(self.remote_url);
         allocator.destroy(self);
     }
@@ -132,10 +132,10 @@ pub const NATSConnector = struct {
 
 pub const TCPConnector = struct {
     allocator: Allocator,
-    source_key: []const u8,
+    source_name: []const u8,
     remote_url: []const u8,
 
-    pub fn open(allocator: Allocator, config: SourceConfig) !Connector {
+    pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
         if (config.remote_url == null) {
             return error.TCPRequiresRemoteUrl;
         }
@@ -143,13 +143,13 @@ pub const TCPConnector = struct {
         const connector = try allocator.create(TCPConnector);
         connector.* = .{
             .allocator = allocator,
-            .source_key = try allocator.dupe(u8, config.source_key),
+            .source_name = try allocator.dupe(u8, source_name),
             // TODO: propagate some error from here as misconf could crash entire runtime
             // in a multi-instance system
             .remote_url = try allocator.dupe(u8, config.remote_url.?),
         };
         errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_key);
+        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -169,7 +169,7 @@ pub const TCPConnector = struct {
 
     fn closeImpl(ptr: *anyopaque, allocator: Allocator) void {
         const self: *TCPConnector = @ptrCast(@alignCast(ptr));
-        allocator.free(self.source_key);
+        allocator.free(self.source_name);
         allocator.free(self.remote_url);
         allocator.destroy(self);
     }
@@ -182,10 +182,10 @@ pub const TCPConnector = struct {
 
 pub const RedisConnector = struct {
     allocator: Allocator,
-    source_key: []const u8,
+    source_name: []const u8,
     remote_url: []const u8,
 
-    pub fn open(allocator: Allocator, config: SourceConfig) !Connector {
+    pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
         if (config.remote_url == null) {
             return error.RedisRequiresRemoteUrl;
         }
@@ -193,11 +193,11 @@ pub const RedisConnector = struct {
         const connector = try allocator.create(RedisConnector);
         connector.* = .{
             .allocator = allocator,
-            .source_key = try allocator.dupe(u8, config.source_key),
+            .source_name = try allocator.dupe(u8, source_name),
             .remote_url = try allocator.dupe(u8, config.remote_url.?),
         };
         errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_key);
+        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -217,7 +217,7 @@ pub const RedisConnector = struct {
 
     fn closeImpl(ptr: *anyopaque, allocator: Allocator) void {
         const self: *RedisConnector = @ptrCast(@alignCast(ptr));
-        allocator.free(self.source_key);
+        allocator.free(self.source_name);
         allocator.free(self.remote_url);
         allocator.destroy(self);
     }
@@ -230,16 +230,17 @@ pub const RedisConnector = struct {
 
 pub fn openConnector(
     allocator: Allocator,
+    source_name: []const u8,
     config: SourceConfig,
 ) !Connector {
     if (std.mem.eql(u8, config.connector_type, "ws")) {
-        return try WebSocketConnector.open(allocator, config);
+        return try WebSocketConnector.open(allocator, source_name, config);
     } else if (std.mem.eql(u8, config.connector_type, "nats")) {
-        return try NATSConnector.open(allocator, config);
+        return try NATSConnector.open(allocator, source_name, config);
     } else if (std.mem.eql(u8, config.connector_type, "tcp")) {
-        return try TCPConnector.open(allocator, config);
+        return try TCPConnector.open(allocator, source_name, config);
     } else if (std.mem.eql(u8, config.connector_type, "redis")) {
-        return try RedisConnector.open(allocator, config);
+        return try RedisConnector.open(allocator, source_name, config);
     } else {
         return error.UnknownConnectorType;
     }

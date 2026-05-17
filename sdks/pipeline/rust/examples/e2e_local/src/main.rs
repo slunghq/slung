@@ -1,4 +1,13 @@
 use slung::prelude::*;
+use slung_macros::{component, rule, source};
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum IncomingMessage {
+    Reading { value: f64 },
+    Alert { triggered: bool },
+    Notification { msg: String },
+}
 
 // Component types
 #[component]
@@ -19,7 +28,7 @@ struct Notification {
 // Source with mappers
 #[source(builtin = "ws")]
 struct LocalExec {
-    #[config]
+    #[config(value = "local-exec")]
     path: &'static str,
 
     #[component(map = parse_reading)]
@@ -34,33 +43,24 @@ struct LocalExec {
 
 // Mappers — translate raw source bytes into typed component values
 fn parse_reading(raw: &[u8]) -> Result<Reading> {
-    let json: serde_json::Value = serde_json::from_slice(raw)?;
-    let value = if json.is_number() {
-        json.as_f64().unwrap_or(0.0)
-    } else {
-        json["value"].as_f64().unwrap_or(0.0)
-    };
-    Ok(Reading { value })
+    match serde_json::from_slice::<IncomingMessage>(raw)? {
+        IncomingMessage::Reading { value } => Ok(Reading { value }),
+        _ => Err(std::io::Error::other("payload is not a reading")),
+    }
 }
 
 fn parse_alert(raw: &[u8]) -> Result<Alert> {
-    let json: serde_json::Value = serde_json::from_slice(raw)?;
-    let triggered = if json.is_boolean() {
-        json.as_bool().unwrap_or(false)
-    } else {
-        json["triggered"].as_bool().unwrap_or(false)
-    };
-    Ok(Alert { triggered })
+    match serde_json::from_slice::<IncomingMessage>(raw)? {
+        IncomingMessage::Alert { triggered } => Ok(Alert { triggered }),
+        _ => Err(std::io::Error::other("payload is not an alert")),
+    }
 }
 
 fn parse_notification(raw: &[u8]) -> Result<Notification> {
-    let json: serde_json::Value = serde_json::from_slice(raw)?;
-    let msg = if json.is_string() {
-        json.as_str().unwrap_or("").to_string()
-    } else {
-        json["msg"].as_str().unwrap_or("").to_string()
-    };
-    Ok(Notification { msg })
+    match serde_json::from_slice::<IncomingMessage>(raw)? {
+        IncomingMessage::Notification { msg } => Ok(Notification { msg }),
+        _ => Err(std::io::Error::other("payload is not a notification")),
+    }
 }
 
 // Rules reference components through the source struct's typed fields

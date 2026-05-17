@@ -12,6 +12,7 @@ const queue_mod = @import("../queue.zig");
 const types = @import("../types.zig");
 const wasm_host = @import("../wasm/host.zig");
 const graph_index = @import("../wasm/index.zig");
+const wasm_module_desc = @import("../wasm/module.zig");
 const wasm_wire = @import("../wasm/wire.zig");
 const server_mod = @import("connectors/server.zig");
 const ws_mod = @import("connectors/ws.zig");
@@ -59,7 +60,8 @@ pub const ModuleSession = struct {
 
     const Self = @This();
     const WsRouteSource = struct {
-        source_key: []const u8,
+        route_path: []const u8,
+        source_name: []const u8,
         source: Arc(Mutex(WsSource)),
     };
 
@@ -71,6 +73,8 @@ pub const ModuleSession = struct {
     ) !*Self {
         const session = try allocator.create(Self);
         errdefer allocator.destroy(session);
+        session.allocator = allocator;
+        session.io = io;
 
         session.forward_index = .empty;
         session.reverse_index = .empty;
@@ -158,28 +162,11 @@ pub const ModuleSession = struct {
         session.source_configs = std.StringHashMap(SourceConfig).init(allocator);
         errdefer {
             var it = session.source_configs.iterator();
-            while (it.next()) |e| allocator.free(e.key_ptr.*);
+            while (it.next()) |e| freeSourceConfig(allocator, e);
             session.source_configs.deinit();
         }
-        {
-            var f_iter = session.forward_index.iterator();
-            while (f_iter.next()) |entry| {
-                const fwd = entry.value_ptr.*;
-                const route = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ fwd.source, fwd.component_type });
-                if (session.source_configs.contains(route)) {
-                    allocator.free(route);
-                    continue;
-                }
-                try session.source_configs.put(route, .{
-                    .connector_type = "ws",
-                    .source_key = route,
-                    .remote_url = null,
-                });
-            }
-        }
+        try session.loadSourceConfigsFromModule();
 
-        session.allocator = allocator;
-        session.io = io;
         session.namespace = try allocator.dupe(u8, config.namespace);
         errdefer allocator.free(session.namespace);
         session.node_id = try allocator.dupe(u8, config.node_id);
@@ -201,7 +188,7 @@ pub const ModuleSession = struct {
         {
             var iter = self.source_configs.iterator();
             while (iter.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
+                freeSourceConfig(self.allocator, entry);
             }
             self.source_configs.deinit();
         }
@@ -319,28 +306,20 @@ pub const ModuleSession = struct {
     fn setupConnectors(self: *Self) !void {
         var iter = self.source_configs.iterator();
         while (iter.next()) |entry| {
-            const source_key = entry.key_ptr.*;
+            const source_name = entry.key_ptr.*;
             const config = entry.value_ptr.*;
 
             const connector = try connectors_mod.openConnector(
                 self.allocator,
+                source_name,
                 config,
             );
             errdefer connector.close(self.allocator);
-
-            try self.connectors.put(source_key, connector);
+            try self.connectors.put(source_name, connector);
 
             if (std.mem.eql(u8, config.connector_type, "ws") and config.remote_url == null) {
-                const forward_key = self.findForwardKeyForRoute(source_key) orelse {
-                    std.log.err("no forward mapping for ws route '{s}'", .{source_key});
-                    std.log.err("available module routes:", .{});
-                    var f_iter = self.forward_index.iterator();
-                    while (f_iter.next()) |f_entry| {
-                        const fwd = f_entry.value_ptr.*;
-                        std.log.err("  - {s}/{s}", .{ fwd.source, fwd.component_type });
-                    }
-                    return error.SourceForwardMappingNotFound;
-                };
+                const route_path = config.route_path orelse source_name;
+                const forward_key = self.findAnyForwardKeyForSource(source_name) orelse return error.SourceForwardMappingNotFound;
 
                 const source_arc = try Arc(Mutex(WsSource)).init(self.allocator, Mutex(WsSource).init(.{
                     .allocator = self.allocator,
@@ -356,11 +335,12 @@ pub const ModuleSession = struct {
                 errdefer source_arc.release();
 
                 if (self.ws_connection) |*connection| {
-                    try connection.listen(source_key, source_arc);
+                    try connection.listen(route_path, source_arc);
                     const source_arc_clone = source_arc.clone();
                     errdefer source_arc_clone.release();
                     try self.ws_sources.append(self.allocator, .{
-                        .source_key = source_key,
+                        .route_path = route_path,
+                        .source_name = source_name,
                         .source = source_arc_clone,
                     });
                 }
@@ -373,7 +353,7 @@ pub const ModuleSession = struct {
         // De-register all WebSocket sources and release the Arcs
         for (self.ws_sources.items) |route_source| {
             if (self.ws_connection) |*connection| {
-                try connection.close(route_source.source_key);
+                try connection.close(route_source.route_path);
             }
             route_source.source.release();
         }
@@ -393,22 +373,14 @@ pub const ModuleSession = struct {
         }
     }
 
-    fn findForwardKeyForRoute(self: *Self, route: []const u8) ?graph_index.ForwardKey {
-        const cut = std.mem.lastIndexOfScalar(u8, route, '/') orelse return null;
-        const source_name = route[0..cut];
-        const component_type = route[cut + 1 ..];
-
-        var found: ?graph_index.ForwardKey = null;
+    fn findAnyForwardKeyForSource(self: *Self, source_name: []const u8) ?graph_index.ForwardKey {
         var iter = self.forward_index.iterator();
         while (iter.next()) |entry| {
             const forward_entry = entry.value_ptr.*;
             if (!std.mem.eql(u8, forward_entry.source, source_name)) continue;
-            if (!std.mem.eql(u8, forward_entry.component_type, component_type)) continue;
-
-            if (found != null) return null;
-            found = entry.key_ptr.*;
+            return entry.key_ptr.*;
         }
-        return found;
+        return null;
     }
 
     fn pollSources(self: *Self) !bool {
@@ -418,7 +390,7 @@ pub const ModuleSession = struct {
             defer guard.deinit();
             if (guard.get().data) |channel_data| {
                 work_done = true;
-                try self.ingestSourceData(ws_route.source_key, channel_data.data);
+                try self.ingestSourceData(ws_route.source_name, channel_data.data);
                 guard.get().data = null;
             }
         }
@@ -426,26 +398,23 @@ pub const ModuleSession = struct {
         var iter = self.connectors.iterator();
 
         while (iter.next()) |entry| {
-            const source_key = entry.key_ptr.*;
+            const source_name = entry.key_ptr.*;
             var connector = entry.value_ptr.*;
 
             while (try connector.next(self.allocator)) |raw_data| {
                 defer self.allocator.free(raw_data);
                 work_done = true;
 
-                try self.ingestSourceData(source_key, raw_data);
+                try self.ingestSourceData(source_name, raw_data);
             }
         }
 
         return work_done;
     }
 
-    fn ingestSourceData(self: *Self, source_key: []const u8, raw_data: []const u8) !void {
-        // source_key format is "SourceName/ComponentType", extract both parts
-        const slash_pos = std.mem.indexOfScalar(u8, source_key, '/') orelse return;
-        const source_name = source_key[0..slash_pos];
-        const component_type = source_key[slash_pos + 1 ..];
-
+    fn ingestSourceData(self: *Self, source_name: []const u8, raw_data: []const u8) !void {
+        var mapper_count: usize = 0;
+        var success_count: usize = 0;
         var iter = self.forward_index.iterator();
         while (iter.next()) |entry| {
             const forward_key = entry.key_ptr.*;
@@ -454,9 +423,7 @@ pub const ModuleSession = struct {
             if (!std.mem.eql(u8, forward_entry.source, source_name)) {
                 continue;
             }
-            if (!std.mem.eql(u8, forward_entry.component_type, component_type)) {
-                continue;
-            }
+            mapper_count += 1;
 
             const input_offset: u32 = 10000;
             const output_offset: u32 = 20000;
@@ -474,15 +441,16 @@ pub const ModuleSession = struct {
                 &.{ input_offset, raw_data.len, output_offset, output_len_offset },
                 results[0..],
             ) catch |err| {
-                std.log.err("Mapper invocation failed for {s}: {}", .{ forward_entry.mapper, err });
+                std.log.debug("Mapper invocation failed for {s}: {}", .{ forward_entry.mapper, err });
                 continue;
             };
 
             const status: i32 = @bitCast(@as(u32, @intCast(results[0])));
             if (status != 0) {
-                std.log.err("Mapper {s} failed with status {}", .{ forward_entry.mapper, status });
+                std.log.debug("Mapper {s} declined payload with status {}", .{ forward_entry.mapper, status });
                 continue;
             }
+            success_count += 1;
 
             const output_len_bytes = try self.wasm_module.memoryRead(self.allocator, output_len_offset, 4);
             defer self.allocator.free(output_len_bytes);
@@ -529,6 +497,59 @@ pub const ModuleSession = struct {
                 };
             }
         }
+
+        if (mapper_count > 0 and success_count == 0) {
+            std.log.warn("No mappers accepted payload for source {s}", .{source_name});
+        }
+    }
+
+    fn loadSourceConfigsFromModule(self: *Self) !void {
+        const exports = self.wasm_module.export_fns;
+        for (exports) |export_info| {
+            if (!std.mem.startsWith(u8, export_info.name, "__slung_source_") or
+                !std.mem.endsWith(u8, export_info.name, "_descriptor"))
+            {
+                continue;
+            }
+
+            var result: [1]u64 = undefined;
+            try self.wasm_module.invoke(export_info.name, &.{}, result[0..]);
+            const length: u32 = @intCast(result[0] & 0xFFFFFFFF);
+            const offset: u32 = @intCast((result[0] >> 32) & 0xFFFFFFFF);
+
+            const bytes = try self.wasm_module.memoryRead(self.allocator, offset, length);
+            defer self.allocator.free(bytes);
+
+            const parsed = try std.json.parseFromSlice(
+                wasm_module_desc.ParsedSourceDescriptor,
+                self.allocator,
+                bytes,
+                .{ .ignore_unknown_fields = true },
+            );
+            defer parsed.deinit();
+
+            const source_name = try self.allocator.dupe(u8, parsed.value.name);
+            errdefer self.allocator.free(source_name);
+
+            const connector_type_src = if (std.mem.eql(u8, parsed.value.kind, "builtin"))
+                parsed.value.builtin
+            else
+                parsed.value.kind;
+            const connector_type = try self.allocator.dupe(u8, connector_type_src);
+            errdefer self.allocator.free(connector_type);
+
+            const route_path = try routePathForSourceConfig(self.allocator, connector_type_src, parsed.value.config);
+            errdefer if (route_path) |path| self.allocator.free(path);
+
+            const remote_url = try remoteUrlForSourceConfig(self.allocator, connector_type_src, parsed.value.config);
+            errdefer if (remote_url) |url| self.allocator.free(url);
+
+            try self.source_configs.put(source_name, .{
+                .connector_type = connector_type,
+                .route_path = route_path,
+                .remote_url = remote_url,
+            });
+        }
     }
 
     fn runInferenceOnce(self: *Self) !usize {
@@ -547,6 +568,45 @@ pub const ModuleSession = struct {
         return try loop.run();
     }
 };
+
+fn freeSourceConfig(allocator: Allocator, entry: anytype) void {
+    allocator.free(entry.key_ptr.*);
+    allocator.free(entry.value_ptr.connector_type);
+    if (entry.value_ptr.route_path) |path| allocator.free(path);
+    if (entry.value_ptr.remote_url) |url| allocator.free(url);
+}
+
+fn routePathForSourceConfig(
+    allocator: Allocator,
+    connector_type: []const u8,
+    config: std.json.Value,
+) !?[]const u8 {
+    if (!std.mem.eql(u8, connector_type, "ws")) return null;
+    const raw_path = jsonObjectString(config, "path") orelse return null;
+    return try allocator.dupe(u8, std.mem.trimStart(u8, raw_path, "/"));
+}
+
+fn remoteUrlForSourceConfig(
+    allocator: Allocator,
+    connector_type: []const u8,
+    config: std.json.Value,
+) !?[]const u8 {
+    if (std.mem.eql(u8, connector_type, "ws")) {
+        if (jsonObjectString(config, "url")) |url| return try allocator.dupe(u8, url);
+        if (jsonObjectString(config, "endpoint")) |endpoint| return try allocator.dupe(u8, endpoint);
+        return null;
+    }
+    if (jsonObjectString(config, "url")) |url| return try allocator.dupe(u8, url);
+    if (jsonObjectString(config, "endpoint")) |endpoint| return try allocator.dupe(u8, endpoint);
+    return null;
+}
+
+fn jsonObjectString(config: std.json.Value, key: []const u8) ?[]const u8 {
+    if (config != .object) return null;
+    const value = config.object.get(key) orelse return null;
+    if (value != .string) return null;
+    return value.string;
+}
 
 const WasmRuleDispatcher = struct {
     module: *zwasm.WasmModule,

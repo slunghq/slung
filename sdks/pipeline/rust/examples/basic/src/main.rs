@@ -4,7 +4,7 @@ use slung::prelude::*;
 // each component field carries its mapper function
 #[source(builtin = "ws")]
 struct SensorData {
-    #[config]
+    #[config(value = "sensor-data")]
     path: &'static str,
 
     #[component(map = parse_temperature)]

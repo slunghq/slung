@@ -33,6 +33,27 @@ pub const SourceDescriptor = struct {
     components: []const ComponentField,
 };
 
+pub const ParsedSourceDescriptor = struct {
+    name: []const u8,
+    kind: []const u8, // "builtin" or "custom"
+    builtin: []const u8 = "", // connector name if kind=="builtin"
+    config: std.json.Value,
+    components: []const ComponentField,
+};
+
+pub fn normalizeSourceDescriptor(
+    allocator: Allocator,
+    parsed: ParsedSourceDescriptor,
+) !SourceDescriptor {
+    return .{
+        .name = parsed.name,
+        .kind = parsed.kind,
+        .builtin = parsed.builtin,
+        .config = try std.json.Stringify.valueAlloc(allocator, parsed.config, .{}),
+        .components = parsed.components,
+    };
+}
+
 /// Component descriptor from module export.
 pub const ComponentDescriptor = struct {
     name: []const u8, // the ComponentType name
