@@ -314,6 +314,7 @@ pub const ModuleSession = struct {
                 source_name,
                 config,
             );
+            errdefer connector.close(self.allocator);
             try self.connectors.put(source_name, connector);
             errdefer if (self.connectors.fetchRemove(source_name)) |kv| {
                 kv.value.close(self.allocator);

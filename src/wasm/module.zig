@@ -36,7 +36,7 @@ pub const SourceDescriptor = struct {
 pub const ParsedSourceDescriptor = struct {
     name: []const u8,
     kind: []const u8, // "builtin" or "custom"
-    builtin: []const u8, // connector name if kind=="builtin"
+    builtin: []const u8 = "", // connector name if kind=="builtin"
     config: std.json.Value,
     components: []const ComponentField,
 };
