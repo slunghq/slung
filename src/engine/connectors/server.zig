@@ -137,6 +137,7 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
                 std.log.info("Client closed connection", .{});
                 break;
             },
+            .pong => {},
             else => {},
         }
     }

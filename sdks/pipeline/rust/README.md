@@ -26,10 +26,16 @@ use slung::prelude::*;
 
 #[source(builtin = "ws")]
 struct SensorData {
-    #[config]
+    #[config(value = "sensor-data")]
     path: &'static str,
 
-    temperature: f64,
+    temperature: Temperature,
+    alert: Alert,
+}
+
+#[component]
+struct Temperature {
+    value: f64,
 }
 
 #[component]
@@ -39,8 +45,8 @@ struct Alert {
 
 #[rule(watch = [SensorData::temperature], priority = 10)]
 fn on_high_temp(ctx: &RuleContext) -> Result<()> {
-    let temp = ctx.get::<f64>(SensorData::temperature)?;
-    ctx.set(Alert::active, temp > 85.0)?;
+    let temp = ctx.get::<Temperature>(SensorData::temperature)?;
+    ctx.set(SensorData::alert, Alert { active: temp.value > 85.0 })?;
     Ok(())
 }
 
@@ -54,6 +60,8 @@ The host:
 3. Loads component values from the LWW store
 4. Fires your rule when `SensorData::temperature` changes
 5. Captures writes back to the store and re-triggers dependent rules
+
+Source config is baked into the module descriptor. Use `#[config(value = "...")]` on source fields and the macro emits those values into the source descriptor JSON for the host to consume at load time.
 
 ## Host ABI
 

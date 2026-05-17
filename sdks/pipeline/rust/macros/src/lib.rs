@@ -1,5 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
+use serde_json::{Number, Value};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
@@ -38,6 +39,7 @@ impl Parse for SourceArgs {
 #[derive(Default)]
 struct SourceFieldMeta {
     is_config: bool,
+    config_value: Option<String>,
     mapper: Option<Ident>,
 }
 
@@ -86,6 +88,7 @@ pub fn source(attr: TokenStream, item: TokenStream) -> TokenStream {
     let builtin = args.builtin.unwrap_or_else(|| "custom".to_string());
 
     let mut component_descriptors = Vec::new();
+    let mut config_entries = Vec::new();
     let mut component_consts = Vec::new();
     let mut mapper_exports = Vec::new();
     let mut next_component_id: u32 = 0;
@@ -95,8 +98,25 @@ pub fn source(attr: TokenStream, item: TokenStream) -> TokenStream {
             continue;
         };
 
-        let meta = strip_source_field_attrs(&mut field.attrs);
+        let meta = match strip_source_field_attrs(&mut field.attrs) {
+            Ok(meta) => meta,
+            Err(err) => return err.to_compile_error().into(),
+        };
         if meta.is_config {
+            let Some(config_value) = meta.config_value.as_deref() else {
+                return syn::Error::new(
+                    field_ident.span(),
+                    "#[config] requires a `value = \"...\"` argument",
+                )
+                .to_compile_error()
+                .into();
+            };
+
+            let json_value = match config_json_value(&field.ty, config_value) {
+                Ok(value) => value,
+                Err(err) => return err.to_compile_error().into(),
+            };
+            config_entries.push((field_ident.to_string(), json_value));
             continue;
         }
 
@@ -160,9 +180,15 @@ pub fn source(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let components_json = component_descriptors.join(",");
+    let config_json = serde_json::to_string(
+        &config_entries
+            .into_iter()
+            .collect::<serde_json::Map<String, Value>>(),
+    )
+    .expect("config JSON serialization should succeed");
     let descriptor_json = format!(
-        r#"{{"name":"{}","kind":"builtin","builtin":"{}","config":"{{}}","components":[{}]}}"#,
-        source_name, builtin, components_json
+        r#"{{"name":"{}","kind":"builtin","builtin":"{}","config":{},"components":[{}]}}"#,
+        source_name, builtin, config_json, components_json
     );
     let descriptor_lit = syn::LitStr::new(&descriptor_json, source_name.span());
     let descriptor_fn = Ident::new(
@@ -283,13 +309,38 @@ pub fn rule(attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-fn strip_source_field_attrs(attrs: &mut Vec<Attribute>) -> SourceFieldMeta {
+fn strip_source_field_attrs(attrs: &mut Vec<Attribute>) -> Result<SourceFieldMeta> {
     let mut meta = SourceFieldMeta::default();
     let mut keep = Vec::new();
 
     for attr in attrs.drain(..) {
         if attr.path().is_ident("config") {
             meta.is_config = true;
+            match &attr.meta {
+                Meta::Path(_) => {}
+                Meta::List(list) => {
+                    let parsed =
+                        list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+
+                    for item in parsed {
+                        if let Meta::NameValue(name_value) = item
+                            && name_value.path.is_ident("value")
+                            && let Expr::Lit(ExprLit {
+                                lit: Lit::Str(value),
+                                ..
+                            }) = name_value.value
+                        {
+                            meta.config_value = Some(value.value());
+                        }
+                    }
+                }
+                Meta::NameValue(_) => {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "#[config] expects `#[config(value = \"...\")]`",
+                    ));
+                }
+            }
             continue;
         }
 
@@ -297,7 +348,7 @@ fn strip_source_field_attrs(attrs: &mut Vec<Attribute>) -> SourceFieldMeta {
             if let Meta::List(list) = &attr.meta {
                 let parsed = list
                     .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                    .unwrap_or_default();
+                    ?;
 
                 for item in parsed {
                     if let Meta::NameValue(name_value) = item
@@ -316,7 +367,54 @@ fn strip_source_field_attrs(attrs: &mut Vec<Attribute>) -> SourceFieldMeta {
     }
 
     *attrs = keep;
-    meta
+    Ok(meta)
+}
+
+fn config_json_value(ty: &Type, raw: &str) -> Result<Value> {
+    let kind = scalar_type_name(ty).unwrap_or_else(|| "str".to_string());
+
+    match kind.as_str() {
+        "str" | "String" => Ok(Value::String(raw.to_string())),
+        "bool" => raw
+            .parse::<bool>()
+            .map(Value::Bool)
+            .map_err(|_| syn::Error::new_spanned(ty, "invalid bool in #[config(value = ...)]")),
+        "u8" | "u16" | "u32" | "u64" | "usize" => raw
+            .parse::<u64>()
+            .map(Number::from)
+            .map(Value::Number)
+            .map_err(|_| syn::Error::new_spanned(ty, "invalid unsigned integer in #[config(value = ...)]")),
+        "i8" | "i16" | "i32" | "i64" | "isize" => raw
+            .parse::<i64>()
+            .map(Number::from)
+            .map(Value::Number)
+            .map_err(|_| syn::Error::new_spanned(ty, "invalid signed integer in #[config(value = ...)]")),
+        "f32" | "f64" => {
+            let parsed = raw
+                .parse::<f64>()
+                .map_err(|_| syn::Error::new_spanned(ty, "invalid float in #[config(value = ...)]"))?;
+            let number = Number::from_f64(parsed).ok_or_else(|| {
+                syn::Error::new_spanned(ty, "float config value must be finite")
+            })?;
+            Ok(Value::Number(number))
+        }
+        _ => Err(syn::Error::new_spanned(
+            ty,
+            "unsupported #[config] field type; use str/String/bool/int/float",
+        )),
+    }
+}
+
+fn scalar_type_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Reference(reference) => scalar_type_name(&reference.elem),
+        Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string()),
+        _ => None,
+    }
 }
 
 fn type_name(ty: &Type) -> String {

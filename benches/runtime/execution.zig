@@ -208,7 +208,7 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
     };
     var loop = InferenceLoop.init(&context, rule_dispatcher, 10, allocator);
 
-    const input = "42.0";
+    const input = "{\"value\": 42.0}";
     const start = std.Io.Clock.awake.now(io);
     var total_fired: usize = 0;
 

@@ -41,10 +41,13 @@ fn fetchSourceDescriptors(allocator: Allocator, wasm_module: *zwasm.WasmModule, 
             const bytes = try wasm_module.memoryRead(allocator, offset, length);
             defer allocator.free(bytes);
 
-            const parsed = try std.json.parseFromSlice(module.SourceDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
+            const parsed = try std.json.parseFromSlice(module.ParsedSourceDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
             defer parsed.deinit();
 
-            _ = try builder.registerSource(parsed.value);
+            const normalized = try module.normalizeSourceDescriptor(allocator, parsed.value);
+            defer allocator.free(normalized.config);
+
+            _ = try builder.registerSource(normalized);
         }
     }
 }
