@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build (${{ matrix.artifact_os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: blacksmith-4vcpu-ubuntu-2404
+            artifact_os: linux
+            artifact_arch: x64
+          - os: blacksmith-4vcpu-ubuntu-2404-arm
+            artifact_os: linux
+            artifact_arch: arm64
+          - os: blacksmith-6vcpu-macos-latest
+            artifact_os: macos
+            artifact_arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Build release binary
+        run: nix develop -c zig build -Doptimize=ReleaseFast
+
+      - name: Package artifact
+        env:
+          OS: ${{ matrix.artifact_os }}
+          ARCH: ${{ matrix.artifact_arch }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          name="slung-${TAG}-${OS}-${ARCH}"
+          cp zig-out/bin/slung "dist/slung"
+          chmod +x dist/slung
+          tar -C dist -czf "${name}.tar.gz" slung
+          shasum -a 256 "${name}.tar.gz" > "${name}.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slung-${{ github.ref_name }}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}
+          path: |
+            slung-${{ github.ref_name }}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}.tar.gz
+            slung-${{ github.ref_name }}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}.sha256
+
+      - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          prerelease: true
+          body: |
+            See: [changelog](https://github.com/slunghq/slung/blob/${{ github.ref_name }}/docs/CHANGELOG.md).
+          files: |
+            slung-${{ github.ref_name }}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}.tar.gz
+            slung-${{ github.ref_name }}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}.sha256
