@@ -316,9 +316,6 @@ pub const ModuleSession = struct {
             );
             errdefer connector.close(self.allocator);
             try self.connectors.put(source_name, connector);
-            errdefer if (self.connectors.fetchRemove(source_name)) |kv| {
-                kv.value.close(self.allocator);
-            };
 
             if (std.mem.eql(u8, config.connector_type, "ws") and config.remote_url == null) {
                 const route_path = config.route_path orelse source_name;
