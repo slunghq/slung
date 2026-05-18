@@ -16,7 +16,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-slung = "0.2.0"
+slung = "0.2.1"
 ```
 
 ## Example: Sensor Alert Rule
