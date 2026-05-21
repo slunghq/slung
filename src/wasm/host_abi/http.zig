@@ -1,38 +1,223 @@
 const std = @import("std");
 
 const zwasm = @import("zwasm");
+const http = @import("dusty");
 
-pub const Context = struct {
+const context_mod = @import("../../engine/context.zig");
+const Context = context_mod.Context;
+
+/// Helper function to perform HTTP requests
+fn performHttpRequest(
+    vm: *zwasm.Vm,
     allocator: std.mem.Allocator,
-    // TODO: inject http_client reference
-};
+    io: std.Io,
+    module: *zwasm.WasmModule,
+    method: http.Method,
+    url_str: []const u8,
+    body_opt: ?[]const u8,
+) !void {
+    var client = http.Client.init(allocator, io, .{});
+    defer client.deinit();
+
+    var response: http.ClientResponse = undefined;
+    defer response.deinit();
+
+    if (body_opt) |body| {
+        response = client.fetch(url_str, .{ .method = method, .body = body }) catch {
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 2));
+            return;
+        };
+    } else {
+        response = client.fetch(url_str, .{ .method = method }) catch {
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 2));
+            return;
+        };
+    }
+
+    var response_buffer: std.ArrayList(u8) = .empty;
+    defer response_buffer.deinit(allocator);
+
+    if (try response.body()) |body| {
+        try response_buffer.appendSlice(allocator, body);
+    }
+
+    const response_data = try response_buffer.toOwnedSlice(allocator);
+    const guest_ptr = try allocateInGuestMemory(module, response_data);
+
+    const status_code: u32 = @intFromEnum(response.status());
+
+    try vm.pushOperand(@as(u64, guest_ptr));
+    try vm.pushOperand(@as(u64, response_data.len));
+    try vm.pushOperand(@as(u64, status_code));
+}
 
 pub fn slung_http_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
-    _ = context;
     const vm: *zwasm.Vm = @ptrCast(@alignCast(ctx_ptr));
-    _ = vm;
-    // TODO: pop url_ptr, url_len from operand stack, perform HTTP GET, allocate response struct, push ptr
+    const ctx: *Context = @ptrFromInt(context);
+
+    // Pop: [url_ptr, url_len]
+    const url_len: u32 = vm.popOperandU32();
+    const url_ptr: u32 = vm.popOperandU32();
+
+    const url_bytes = ctx.module.memoryRead(ctx.allocator, url_ptr, url_len) catch {
+        // Memory read error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_bytes);
+
+    const url_str = ctx.allocator.dupe(u8, url_bytes) catch {
+        // Allocation error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_str);
+
+    try performHttpRequest(vm, ctx.allocator, ctx.io, ctx.module, .get, url_str, null);
 }
 
 pub fn slung_http_post(ctx_ptr: *anyopaque, context: usize) anyerror!void {
-    _ = context;
     const vm: *zwasm.Vm = @ptrCast(@alignCast(ctx_ptr));
-    _ = vm;
-    // TODO: pop url_ptr, url_len, body_ptr, body_len from operand stack, perform HTTP POST, allocate response struct, push ptr
+    const ctx: *Context = @ptrFromInt(context);
+
+    // Pop: [url_ptr, url_len, body_ptr, body_len]
+    const body_len: u32 = vm.popOperandU32();
+    const body_ptr: u32 = vm.popOperandU32();
+    const url_len: u32 = vm.popOperandU32();
+    const url_ptr: u32 = vm.popOperandU32();
+
+    const url_bytes = ctx.module.memoryRead(ctx.allocator, url_ptr, url_len) catch {
+        // Memory read error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_bytes);
+
+    const body_bytes = ctx.module.memoryRead(ctx.allocator, body_ptr, body_len) catch {
+        // Memory read error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(body_bytes);
+
+    const url_str = ctx.allocator.dupe(u8, url_bytes) catch {
+        // Allocation error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_str);
+
+    const body_str = ctx.allocator.dupe(u8, body_bytes) catch {
+        // Allocation error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(body_str);
+
+    try performHttpRequest(vm, ctx.allocator, ctx.io, ctx.module, .post, url_str, body_str);
 }
 
 pub fn slung_http_put(ctx_ptr: *anyopaque, context: usize) anyerror!void {
-    _ = context;
     const vm: *zwasm.Vm = @ptrCast(@alignCast(ctx_ptr));
-    _ = vm;
-    // TODO: pop url_ptr, url_len, body_ptr, body_len from operand stack, perform HTTP PUT, allocate response struct, push ptr
+    const ctx: *Context = @ptrFromInt(context);
+
+    // Pop: [url_ptr, url_len, body_ptr, body_len]
+    const body_len: u32 = vm.popOperandU32();
+    const body_ptr: u32 = vm.popOperandU32();
+    const url_len: u32 = vm.popOperandU32();
+    const url_ptr: u32 = vm.popOperandU32();
+
+    const url_bytes = ctx.module.memoryRead(ctx.allocator, url_ptr, url_len) catch {
+        // Memory read error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_bytes);
+
+    const body_bytes = ctx.module.memoryRead(ctx.allocator, body_ptr, body_len) catch {
+        // Memory read error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(body_bytes);
+
+    const url_str = ctx.allocator.dupe(u8, url_bytes) catch {
+        // Allocation error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_str);
+
+    const body_str = ctx.allocator.dupe(u8, body_bytes) catch {
+        // Allocation error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(body_str);
+
+    try performHttpRequest(vm, ctx.allocator, ctx.io, ctx.module, .put, url_str, body_str);
 }
 
 pub fn slung_http_delete(ctx_ptr: *anyopaque, context: usize) anyerror!void {
-    _ = context;
     const vm: *zwasm.Vm = @ptrCast(@alignCast(ctx_ptr));
-    _ = vm;
-    // TODO: pop url_ptr, url_len from operand stack, perform HTTP DELETE, allocate response struct, push ptr
+    const ctx: *Context = @ptrFromInt(context);
+
+    // Pop: [url_ptr, url_len]
+    const url_len: u32 = vm.popOperandU32();
+    const url_ptr: u32 = vm.popOperandU32();
+
+    const url_bytes = ctx.module.memoryRead(ctx.allocator, url_ptr, url_len) catch {
+        // Memory read error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_bytes);
+
+    const url_str = ctx.allocator.dupe(u8, url_bytes) catch {
+        // Allocation error
+        try vm.pushOperand(@as(u64, 0)); // response_ptr
+        try vm.pushOperand(@as(u64, 0)); // response_len
+        try vm.pushOperand(@as(u64, 1)); // status: error
+        return;
+    };
+    defer ctx.allocator.free(url_str);
+
+    try performHttpRequest(vm, ctx.allocator, ctx.io, ctx.module, .delete, url_str, null);
+}
+
+/// Allocate a buffer in guest memory and copy data into it.
+fn allocateInGuestMemory(module: *zwasm.WasmModule, data: []const u8) !u32 {
+    const guest_buffer_offset: u32 = 0x10000;
+
+    try module.memoryWrite(guest_buffer_offset, data);
+
+    return guest_buffer_offset;
 }
 
 pub fn appendHostFunctions(

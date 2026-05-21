@@ -228,6 +228,63 @@ pub const RedisConnector = struct {
     };
 };
 
+pub const HTTPConnector = struct {
+    allocator: Allocator,
+    source_name: []const u8,
+    route_path: ?[]const u8,
+    queue_arc: ?*anyopaque,
+
+    pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
+        const connector = try allocator.create(HTTPConnector);
+        connector.* = .{
+            .allocator = allocator,
+            .source_name = try allocator.dupe(u8, source_name),
+            .route_path = if (config.route_path) |path| try allocator.dupe(u8, path) else null,
+            .queue_arc = null,
+        };
+        errdefer allocator.destroy(connector);
+        errdefer allocator.free(connector.source_name);
+        if (connector.route_path) |path| {
+            errdefer allocator.free(path);
+        }
+
+        return .{
+            .ptr = connector,
+            .vtable = &vtable,
+        };
+    }
+
+    fn nextImpl(ptr: *anyopaque, allocator: Allocator) !?[]u8 {
+        const self: *HTTPConnector = @ptrCast(@alignCast(ptr));
+
+        if (self.queue_arc == null) {
+            return null; // Not connected to HTTP server yet
+        }
+
+        // This is a placeholder. The actual queue reference is set up
+        // when the connector is registered with the HTTP server in events.zig
+        _ = allocator;
+        return null;
+    }
+
+    fn closeImpl(ptr: *anyopaque, allocator: Allocator) void {
+        const self: *HTTPConnector = @ptrCast(@alignCast(ptr));
+        allocator.free(self.source_name);
+        if (self.route_path) |path| {
+            allocator.free(path);
+        }
+        if (self.queue_arc != null) {
+            // Release will be done by events.zig
+        }
+        allocator.destroy(self);
+    }
+
+    const vtable = Connector.VTable{
+        .next = nextImpl,
+        .close = closeImpl,
+    };
+};
+
 pub fn openConnector(
     allocator: Allocator,
     source_name: []const u8,
@@ -235,6 +292,8 @@ pub fn openConnector(
 ) !Connector {
     if (std.mem.eql(u8, config.connector_type, "ws")) {
         return try WebSocketConnector.open(allocator, source_name, config);
+    } else if (std.mem.eql(u8, config.connector_type, "http")) {
+        return try HTTPConnector.open(allocator, source_name, config);
     } else if (std.mem.eql(u8, config.connector_type, "nats")) {
         return try NATSConnector.open(allocator, source_name, config);
     } else if (std.mem.eql(u8, config.connector_type, "tcp")) {

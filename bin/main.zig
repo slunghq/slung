@@ -47,6 +47,7 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
     var namespace: []const u8 = "default";
     var node_id: []const u8 = "node-1";
     var ws_port: u16 = 2073;
+    var http_port: u16 = 2074;
 
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--module")) {
@@ -58,6 +59,9 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
         } else if (std.mem.eql(u8, arg, "--ws-port")) {
             const v = it.next() orelse return error.InvalidArguments;
             ws_port = try std.fmt.parseInt(u16, v, 10);
+        } else if (std.mem.eql(u8, arg, "--http-port")) {
+            const v = it.next() orelse return error.InvalidArguments;
+            http_port = try std.fmt.parseInt(u16, v, 10);
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             usage();
             return;
@@ -71,26 +75,39 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
     const wasm_bytes = try readFile(allocator, io, module_path_resolved);
     defer allocator.free(wasm_bytes);
 
-    const server = try allocator.create(slung.engine.Server);
+    const server = try allocator.create(slung.engine.ws.Server);
     defer allocator.destroy(server);
     defer server.deinit();
 
-    server.* = try slung.engine.Server.init(allocator, io, .{ .port = ws_port });
+    server.* = try slung.engine.ws.Server.init(allocator, io, .{ .port = ws_port });
+
+    const http_server = try allocator.create(slung.engine.http.Server);
+    defer allocator.destroy(http_server);
+    defer http_server.deinit();
+
+    http_server.* = try slung.engine.http.Server.init(allocator, io, .{ .port = http_port });
 
     var group: zio.Group = .init;
     defer group.cancel();
 
     try group.spawn(struct {
-        fn run(s: *slung.engine.Server) !void {
+        fn run(s: *slung.engine.ws.Server) !void {
             try s.serve();
         }
     }.run, .{server});
+
+    try group.spawn(struct {
+        fn run(hs: *slung.engine.http.Server) !void {
+            try hs.serve();
+        }
+    }.run, .{http_server});
 
     const config = slung.engine.ModuleConfig{
         .io = io,
         .namespace = namespace,
         .node_id = node_id,
         .server = server,
+        .http_server = http_server,
     };
 
     const session = try slung.engine.ModuleSession.init(allocator, io, wasm_bytes, config);

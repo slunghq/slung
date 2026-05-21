@@ -6,8 +6,8 @@
 
 pub const connectors = @import("./engine/connectors.zig");
 pub const SourceConfig = connectors.SourceConfig;
-pub const server = @import("./engine/connectors/server.zig");
-pub const Server = server.Server;
+pub const ws = @import("./engine/connectors/ws.zig");
+pub const http = @import("./engine/connectors/http.zig");
 pub const context = @import("./engine/context.zig");
 pub const Context = context.Context;
 pub const ClaimRegister = context.ClaimRegister;
