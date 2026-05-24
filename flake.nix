@@ -25,6 +25,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
+          inherit (pkgs) gcc glibc;
           buildInputs = with pkgs; [
             # Use Zig 0.16.0 from the overlay
             zigpkgs."0.16.0"
@@ -35,9 +36,18 @@
             # File watching for hot reload
             entr
             watchexec
+            glibc
+            gcc
           ];
 
+          hardeningDisable = [ "all" ];
+
           shellHook = ''
+                        export CFLAGS="-std=gnu99 -D__STDC_WANT_IEC_60559_BFP_EXT__"
+                        export CXXFLAGS="-std=gnu99"
+                        export CC="${pkgs.gcc}/bin/gcc"
+                        export CXX="${pkgs.gcc}/bin/g++"
+
                         echo "Zig version: $(zig version)"
                         echo "Development environment!"
                         echo ""
