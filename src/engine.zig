@@ -4,16 +4,18 @@
 //! + context: Runtime state and claim register
 //! + loop: Main inference engine
 
-pub const connectors = @import("./engine/connectors.zig");
-pub const SourceConfig = connectors.SourceConfig;
-pub const ws = @import("./engine/connectors/ws.zig");
-pub const http = @import("./engine/connectors/http.zig");
+const build_options = @import("build_options");
+
+pub const connectors = if (build_options.enable_connectors) @import("./engine/connectors.zig") else null;
+pub const SourceConfig = if (build_options.enable_connectors) connectors.?.SourceConfig else void;
+pub const ws = if (build_options.enable_connectors) @import("./engine/connectors/ws.zig") else null;
+pub const http = if (build_options.enable_connectors) @import("./engine/connectors/http.zig") else null;
 pub const context = @import("./engine/context.zig");
 pub const Context = context.Context;
 pub const ClaimRegister = context.ClaimRegister;
-pub const events = @import("./engine/events.zig");
-pub const ModuleSession = events.ModuleSession;
-pub const ModuleConfig = events.ModuleConfig;
+pub const events = if (build_options.enable_connectors) @import("./engine/events.zig") else struct {};
+pub const ModuleSession = if (build_options.enable_connectors) @import("./engine/events.zig").ModuleSession else void;
+pub const ModuleConfig = if (build_options.enable_connectors) @import("./engine/events.zig").ModuleConfig else void;
 pub const loop = @import("./engine/loop.zig");
 pub const InferenceLoop = loop.InferenceLoop;
 pub const RuleDispatcher = loop.RuleDispatcher;
