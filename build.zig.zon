@@ -38,8 +38,8 @@
             .hash = "zio-0.11.0-xHbVVEqQGwDz0MYoQ0j7Ke0Y9E_iZVe5eLAWK4gd9U0i",
         },
         .codspeed = .{
-            .url = "git+https://github.com/notxorand/codspeed-zig#1bfd9391e7652ad96e10219f93befa1f9004b09d",
-            .hash = "codspeed-0.0.1-Km8V_B5kBwBtBGX-oHX6MBxYvuvWWAs2aNVO6_CA2Fg_",
+            .url = "git+https://github.com/notxorand/codspeed.zig#a07d3f92fbf96917cbaee0234b664062957cb8bf",
+            .hash = "codspeed-0.0.1-LFS0qLw9CAB0elvjixVsch0gkxVPzH16rB0h1X0LITQf",
         },
         .toml = .{
             .url = "git+https://github.com/notxorand/zig-toml#cf50bd59c6276fb2b6d34b8d71d35486eecc719c",
