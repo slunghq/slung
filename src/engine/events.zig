@@ -26,7 +26,8 @@ const loop_mod = @import("loop.zig");
 const InferenceLoop = loop_mod.InferenceLoop;
 const RuleDispatcher = loop_mod.RuleDispatcher;
 
-const WsSource = ws_mod.Source(ws_mod.Server.ChannelData);
+const WsSource = @import("connectors/shared.zig").Source(ws_mod.Server.ChannelData);
+const HttpSource = @import("connectors/shared.zig").Source(http_mod.Server.RequestBody);
 
 pub const ModuleConfig = struct {
     io: std.Io,
@@ -71,7 +72,7 @@ pub const ModuleSession = struct {
     const HttpRouteSource = struct {
         route_path: []const u8,
         source_name: []const u8,
-        source: Arc(Mutex(http_mod.Source(http_mod.Server.RequestBody))),
+        source: Arc(Mutex(HttpSource)),
     };
 
     pub fn init(
@@ -374,7 +375,7 @@ pub const ModuleSession = struct {
                 const route_path = config.route_path orelse source_name;
                 const forward_key = self.findAnyForwardKeyForSource(source_name) orelse return error.SourceForwardMappingNotFound;
 
-                const source_arc = try Arc(Mutex(http_mod.Source(http_mod.Server.RequestBody))).init(self.allocator, Mutex(http_mod.Source(http_mod.Server.RequestBody)).init(.{
+                const source_arc = try Arc(Mutex(HttpSource)).init(self.allocator, Mutex(HttpSource).init(.{
                     .allocator = self.allocator,
                     .namespace = self.namespace,
                     .node_id = self.node_id,

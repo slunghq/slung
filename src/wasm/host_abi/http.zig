@@ -46,6 +46,7 @@ fn performHttpRequest(
     }
 
     const response_data = try response_buffer.toOwnedSlice(allocator);
+    defer allocator.free(response_data);
     const guest_ptr = try allocateInGuestMemory(module, response_data);
 
     const status_code: u32 = @intFromEnum(response.status());
@@ -212,6 +213,7 @@ pub fn slung_http_delete(ctx_ptr: *anyopaque, context: usize) anyerror!void {
 }
 
 /// Allocate a buffer in guest memory and copy data into it.
+/// TODO: include allocation in SDK and call that instead
 fn allocateInGuestMemory(module: *zwasm.WasmModule, data: []const u8) !u32 {
     const guest_buffer_offset: u32 = 0x10000;
 

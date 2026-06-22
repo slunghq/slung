@@ -6,30 +6,7 @@ const http = @import("dusty");
 
 const Arc = @import("../../primitives/arc.zig").Arc;
 const Mutex = @import("../../primitives/mutex.zig").Mutex;
-const types = @import("../../types.zig");
-const LwwRegistry = @import("../../memory/lww.zig").LwwRegistry;
-const Hlc = @import("../../primitives/hlc.zig").Hlc;
-const DirtyQueue = @import("../../queue.zig").DirtyQueue;
-
-pub fn Source(D: type) type {
-    return struct {
-        allocator: Allocator,
-        namespace: []const u8,
-        node_id: types.NodeId,
-        entity_id: types.EntityId,
-        component_id: types.ComponentId,
-        lww_store: Arc(Mutex(LwwRegistry)),
-        dirty_queue: Arc(Mutex(DirtyQueue)),
-        clock: *Hlc,
-        data: ?D = null,
-
-        const Self = @This();
-
-        pub fn write(self: *Self, data: D) !void {
-            self.data = data;
-        }
-    };
-}
+const Source = @import("shared.zig").Source;
 
 pub const HTTPServerConnection = struct {
     allocator: Allocator,
@@ -68,7 +45,7 @@ pub const HTTPServerConnection = struct {
         defer self.server.sources_mutex.unlock(self.server.io);
         if (self.server.sources.fetchRemove(route_key)) |kv| {
             self.allocator.free(kv.key);
-            kv.value.release(); // Release the Arc to decrement its ref count
+            kv.value.release();
         }
     }
 };
@@ -137,7 +114,6 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
         defer source_arc.release();
 
         if (try req.body()) |body| {
-            // Make a copy of the body since the request buffer may be reused
             const body_copy = try context.allocator.alloc(u8, body.len);
             @memcpy(body_copy, body);
             errdefer context.allocator.free(body_copy);
@@ -148,9 +124,9 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
 
             const guard = source_arc.getMut().lock();
             defer guard.deinit();
+            if (guard.get().data) |prev| context.allocator.free(prev.data);
             try guard.get().write(request);
 
-            // Respond with 200 OK
             try res.header("Content-Type", "application/json");
             res.status = .ok;
             res.body =
@@ -159,7 +135,6 @@ fn serverDynamicDispatch(context: *Server, req: *http.Request, res: *http.Respon
                 \\}
             ;
         } else {
-            // No body in request
             try res.header("Content-Type", "application/json");
             res.status = .bad_request;
             res.body =
