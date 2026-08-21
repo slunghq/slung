@@ -214,9 +214,21 @@ fn allocateInGuestMemory(vm: *zwasm.Vm, module: *zwasm.WasmModule, data: []const
     if (data.len == 0) return 0;
 
     var results = [_]u64{0};
-    try vm.invoke(&module.instance, "slung_alloc", &.{data.len}, results[0..]);
-    const guest_buffer_offset: u32 = @intCast(results[0]);
-    if (guest_buffer_offset == 0) return error.GuestAllocationFailed;
+    if (module.instance.getExportFunc("slung_alloc") != null) {
+        try vm.invoke(&module.instance, "slung_alloc", &.{data.len}, results[0..]);
+        const guest_buffer_offset: u32 = @intCast(results[0]);
+        if (guest_buffer_offset == 0) return error.GuestAllocationFailed;
+        try module.memoryWrite(guest_buffer_offset, data);
+        return guest_buffer_offset;
+    }
+
+    // Legacy modules without slung_alloc receive a fresh page range outside
+    // their current linear memory instead of using a fixed heap address.
+    const page_size = 64 * 1024;
+    const pages: u32 = @intCast((data.len + page_size - 1) / page_size);
+    const memory = try module.instance.getMemory(0);
+    const old_pages = try memory.grow(pages);
+    const guest_buffer_offset = old_pages * page_size;
     try module.memoryWrite(guest_buffer_offset, data);
 
     return guest_buffer_offset;
