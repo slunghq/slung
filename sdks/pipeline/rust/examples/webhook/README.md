@@ -45,8 +45,8 @@ External System (Shopify, Database, etc)
 ## Building
 
 ```bash
-# Build the webhook example as a Wasm module
-cargo build --example webhook --target wasm32-unknown-unknown
+# The repository includes a ready-to-run Wasm fixture at:
+# src/testdata/webhook.wasm
 ```
 
 ## Running
@@ -60,8 +60,8 @@ zig build
 
 # Run the webhook example with the HTTP connector
 zig build run -- run \
-  --module ../target/wasm32-unknown-unknown/debug/webhook.wasm \
-  --namespace inventory \
+  --module src/testdata/webhook.wasm \
+  --namespace test_ns \
   --node-id node-1 \
   --ws-port 2073 \
   --http-port 2074
@@ -76,11 +76,12 @@ WebSocket gateway listening on http://0.0.0.0:2073
 ### Terminal 2: Send Test Webhooks
 
 ```bash
-# Make test.sh executable
-chmod +x examples/webhook/test.sh
+# Run the test script from the example directory
+cd sdks/pipeline/rust/examples/webhook
+chmod +x test.sh
 
 # Run the test script
-./examples/webhook/test.sh
+./test.sh
 ```
 
 Or send individual webhooks manually:

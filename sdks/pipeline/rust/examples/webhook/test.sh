@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Webhook example test script
 # Tests the HTTP webhook receiver with inventory and order events
 
@@ -10,7 +10,7 @@ echo "This script sends test webhooks to the Slung runtime."
 echo "Make sure Slung is running first:"
 echo ""
 echo "  cd slung"
-echo "  zig build run -- run --module ../target/wasm32-unknown-unknown/debug/webhook.wasm --namespace inventory --node-id node-1"
+echo "  zig build run -- run --module src/testdata/webhook.wasm --namespace test_ns --node-id node-1"
 echo ""
 echo "Then run this script to send test webhooks."
 echo ""

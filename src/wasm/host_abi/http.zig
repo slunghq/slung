@@ -26,14 +26,14 @@ fn performHttpRequest(
         response = client.fetch(url_str, .{ .method = method, .body = body }) catch {
             try vm.pushOperand(@as(u64, 0));
             try vm.pushOperand(@as(u64, 0));
-            try vm.pushOperand(@as(u64, 2));
+            try vm.pushOperand(@as(u64, 1));
             return;
         };
     } else {
         response = client.fetch(url_str, .{ .method = method }) catch {
             try vm.pushOperand(@as(u64, 0));
             try vm.pushOperand(@as(u64, 0));
-            try vm.pushOperand(@as(u64, 2));
+            try vm.pushOperand(@as(u64, 1));
             return;
         };
     }
@@ -47,13 +47,19 @@ fn performHttpRequest(
 
     const response_data = try response_buffer.toOwnedSlice(allocator);
     defer allocator.free(response_data);
-    const guest_ptr = try allocateInGuestMemory(module, response_data);
+    const guest_ptr = allocateInGuestMemory(vm, module, response_data) catch {
+        try vm.pushOperand(@as(u64, 0));
+        try vm.pushOperand(@as(u64, 0));
+        try vm.pushOperand(@as(u64, 1));
+        return;
+    };
 
-    const status_code: u32 = @intFromEnum(response.status());
+    const status: u32 = if (@intFromEnum(response.status()) >= 200 and
+        @intFromEnum(response.status()) < 300) 0 else 1;
 
     try vm.pushOperand(@as(u64, guest_ptr));
     try vm.pushOperand(@as(u64, response_data.len));
-    try vm.pushOperand(@as(u64, status_code));
+    try vm.pushOperand(@as(u64, status));
 }
 
 pub fn slung_http_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
@@ -213,12 +219,15 @@ pub fn slung_http_delete(ctx_ptr: *anyopaque, context: usize) anyerror!void {
 }
 
 /// Allocate a buffer in guest memory and copy data into it.
-/// TODO: include allocation in SDK and call that instead
-fn allocateInGuestMemory(module: *zwasm.WasmModule, data: []const u8) !u32 {
-    const guest_buffer_offset: u32 = 0x10000;
+fn allocateInGuestMemory(vm: *zwasm.Vm, module: *zwasm.WasmModule, data: []const u8) !u32 {
+    if (data.len == 0) return 0;
+
+    var results = [_]u64{0};
+    try vm.invoke(&module.instance, "slung_alloc", &.{data.len}, results[0..]);
+    const guest_buffer_offset: u32 = @intCast(results[0]);
+    if (guest_buffer_offset == 0) return error.GuestAllocationFailed;
 
     try module.memoryWrite(guest_buffer_offset, data);
-
     return guest_buffer_offset;
 }
 

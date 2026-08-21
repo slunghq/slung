@@ -122,13 +122,17 @@ pub fn get<T: for<'de> Deserialize<'de>>(
         return Ok(None);
     }
 
-    // Read from guest memory
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
-
-    match serde_json::from_slice(bytes) {
+    // Read from guest memory, then release the host-allocated buffer.
+    let result = match unsafe {
+        serde_json::from_slice(std::slice::from_raw_parts(ptr as *const u8, len))
+    } {
         Ok(value) => Ok(Some(value)),
         Err(e) => Err(std::io::Error::other(format!("JSON parse error: {}", e))),
+    };
+    unsafe {
+        crate::slung_dealloc(ptr as *mut u8, len);
     }
+    result
 }
 
 /// HLC timestamp — encodes wall clock, logical counter, and node id

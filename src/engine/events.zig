@@ -198,7 +198,6 @@ pub const ModuleSession = struct {
         {
             const iter = self.http_sources.items;
             for (iter) |item| {
-                self.allocator.free(item.route_path);
                 self.allocator.free(item.source_name);
                 item.source.release();
             }
@@ -418,6 +417,7 @@ pub const ModuleSession = struct {
             if (self.http_connection) |*connection| {
                 try connection.close(route_source.route_path);
             }
+            self.allocator.free(route_source.source_name);
             route_source.source.release();
         }
         self.http_sources.clearRetainingCapacity();

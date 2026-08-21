@@ -236,17 +236,23 @@ pub const HTTPConnector = struct {
 
     pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
         const connector = try allocator.create(HTTPConnector);
+        errdefer allocator.destroy(connector);
+
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+
+        const owned_route_path = if (config.route_path) |path| blk: {
+            const owned = try allocator.dupe(u8, path);
+            errdefer allocator.free(owned);
+            break :blk owned;
+        } else null;
+
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            .route_path = if (config.route_path) |path| try allocator.dupe(u8, path) else null,
+            .source_name = owned_source_name,
+            .route_path = owned_route_path,
             .queue_arc = null,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
-        if (connector.route_path) |path| {
-            errdefer allocator.free(path);
-        }
 
         return .{
             .ptr = connector,
