@@ -19,24 +19,21 @@ fn performHttpRequest(
     var client = http.Client.init(allocator, io, .{});
     defer client.deinit();
 
-    var response: http.ClientResponse = undefined;
+    var response = if (body_opt) |body|
+        client.fetch(url_str, .{ .method = method, .body = body }) catch {
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 1));
+            return;
+        }
+    else
+        client.fetch(url_str, .{ .method = method }) catch {
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 0));
+            try vm.pushOperand(@as(u64, 1));
+            return;
+        };
     defer response.deinit();
-
-    if (body_opt) |body| {
-        response = client.fetch(url_str, .{ .method = method, .body = body }) catch {
-            try vm.pushOperand(@as(u64, 0));
-            try vm.pushOperand(@as(u64, 0));
-            try vm.pushOperand(@as(u64, 1));
-            return;
-        };
-    } else {
-        response = client.fetch(url_str, .{ .method = method }) catch {
-            try vm.pushOperand(@as(u64, 0));
-            try vm.pushOperand(@as(u64, 0));
-            try vm.pushOperand(@as(u64, 1));
-            return;
-        };
-    }
 
     var response_buffer: std.ArrayList(u8) = .empty;
     defer response_buffer.deinit(allocator);
