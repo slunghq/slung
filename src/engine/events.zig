@@ -337,8 +337,16 @@ pub const ModuleSession = struct {
                 source_name,
                 config,
             );
-            errdefer connector.close(self.allocator);
+            var connector_tracked = false;
+            errdefer if (connector_tracked) {
+                if (self.connectors.fetchRemove(source_name)) |removed| {
+                    removed.value.close(self.allocator);
+                }
+            } else {
+                connector.close(self.allocator);
+            };
             try self.connectors.put(source_name, connector);
+            connector_tracked = true;
 
             if (std.mem.eql(u8, config.connector_type, "ws") and config.remote_url == null) {
                 const route_path = config.route_path orelse source_name;
@@ -359,6 +367,7 @@ pub const ModuleSession = struct {
 
                 if (self.ws_connection) |*connection| {
                     try connection.listen(route_path, source_arc);
+                    errdefer connection.close(route_path) catch {};
                     const source_arc_clone = source_arc.clone();
                     errdefer source_arc_clone.release();
                     try self.ws_sources.append(self.allocator, .{
@@ -389,6 +398,7 @@ pub const ModuleSession = struct {
 
                 if (self.http_connection) |*connection| {
                     try connection.listen(route_path, source_arc);
+                    errdefer connection.close(route_path) catch {};
                     const source_arc_clone = source_arc.clone();
                     errdefer source_arc_clone.release();
                     try self.http_sources.append(self.allocator, .{
