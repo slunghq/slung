@@ -205,7 +205,9 @@ pub const GraphBuilder = struct {
             const component_id = self.next_component_id;
             self.next_component_id += 1;
 
-            try component_map.put(try self.allocator.dupe(u8, comp.name), component_id);
+            const duped_name = try self.allocator.dupe(u8, comp.name);
+            errdefer self.allocator.free(duped_name);
+            try component_map.put(duped_name, component_id);
 
             const key: ForwardKey = .{
                 .entity = entity_id,
@@ -369,11 +371,17 @@ pub const GraphBuilder = struct {
                 }
             }
 
+            const duped_source_name = try self.allocator.dupe(u8, source_name);
+            errdefer self.allocator.free(duped_source_name);
+            const duped_type_name = try self.allocator.dupe(u8, reg.type_name);
+            errdefer self.allocator.free(duped_type_name);
+            const duped_mapper = try self.allocator.dupe(u8, reg.mapper);
+            errdefer self.allocator.free(duped_mapper);
             try forward.put(self.allocator, key, .{
                 .watchers = try self.allocator.alloc(types.RuleId, 0),
-                .source = try self.allocator.dupe(u8, source_name),
-                .component_type = try self.allocator.dupe(u8, reg.type_name),
-                .mapper = try self.allocator.dupe(u8, reg.mapper),
+                .source = duped_source_name,
+                .component_type = duped_type_name,
+                .mapper = duped_mapper,
                 .dynamic = reg.dynamic,
             });
         }
