@@ -400,6 +400,7 @@ pub const ModuleSession = struct {
                     try connection.listen(route_path, source_arc);
                     errdefer connection.close(route_path) catch {};
                     const source_arc_clone = source_arc.clone();
+                    errdefer source_arc_clone.release();
                     const duped_name = try self.allocator.dupe(u8, source_name);
                     errdefer self.allocator.free(duped_name);
                     try self.http_sources.append(self.allocator, .{
@@ -407,7 +408,6 @@ pub const ModuleSession = struct {
                         .source_name = duped_name,
                         .source = source_arc_clone,
                     });
-                    errdefer source_arc_clone.release();
                 }
                 source_arc.release();
             }
