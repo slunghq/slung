@@ -34,8 +34,10 @@ fn request(vm: *zwasm.Vm, allocator: std.mem.Allocator, io: std.Io, module: *zwa
     defer response.deinit();
     var buffer: std.ArrayList(u8) = .empty;
     defer buffer.deinit(allocator);
-    if (try response.body()) |data| try buffer.appendSlice(allocator, data);
-    const owned = try buffer.toOwnedSlice(allocator);
+    if (response.body() catch return fail(vm, module, ptr_addr, len_addr)) |data| {
+        buffer.appendSlice(allocator, data) catch return fail(vm, module, ptr_addr, len_addr);
+    }
+    const owned = buffer.toOwnedSlice(allocator) catch return fail(vm, module, ptr_addr, len_addr);
     defer allocator.free(owned);
     const guest_ptr = allocate(vm, module, owned) catch return fail(vm, module, ptr_addr, len_addr);
     const status: u32 = if (@intFromEnum(response.status()) >= 200 and @intFromEnum(response.status()) < 300) 0 else 1;
