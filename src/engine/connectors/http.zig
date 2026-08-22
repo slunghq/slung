@@ -38,7 +38,7 @@ pub const HTTPServerConnection = struct {
     }
 
     pub fn close(self: *HTTPServerConnection, source_key: []const u8) !void {
-        const route_key = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.namespace, source_key }) catch return;
+        const route_key = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.namespace, source_key });
         defer self.allocator.free(route_key);
 
         try self.server.sources_mutex.lock(self.server.io);
