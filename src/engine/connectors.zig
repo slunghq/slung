@@ -33,14 +33,17 @@ pub const WebSocketConnector = struct {
 
     pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
         const connector = try allocator.create(WebSocketConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = if (config.remote_url) |url| try allocator.dupe(u8, url) else null;
+        errdefer if (owned_remote_url) |url| allocator.free(url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            .remote_url = if (config.remote_url) |url| try allocator.dupe(u8, url) else null,
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
             .mode = if (config.remote_url != null) .client else .server,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -91,15 +94,16 @@ pub const NATSConnector = struct {
         }
 
         const connector = try allocator.create(NATSConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = try allocator.dupe(u8, config.remote_url.?);
+        errdefer allocator.free(owned_remote_url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            // TODO: propagate some error from here as misconf could crash entire runtime
-            // in a multi-instance system
-            .remote_url = try allocator.dupe(u8, config.remote_url.?),
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -141,15 +145,16 @@ pub const TCPConnector = struct {
         }
 
         const connector = try allocator.create(TCPConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = try allocator.dupe(u8, config.remote_url.?);
+        errdefer allocator.free(owned_remote_url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            // TODO: propagate some error from here as misconf could crash entire runtime
-            // in a multi-instance system
-            .remote_url = try allocator.dupe(u8, config.remote_url.?),
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -191,13 +196,16 @@ pub const RedisConnector = struct {
         }
 
         const connector = try allocator.create(RedisConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = try allocator.dupe(u8, config.remote_url.?);
+        errdefer allocator.free(owned_remote_url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            .remote_url = try allocator.dupe(u8, config.remote_url.?),
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
