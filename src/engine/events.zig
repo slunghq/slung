@@ -416,9 +416,12 @@ pub const ModuleSession = struct {
 
     fn closeConnectors(self: *Self) !void {
         // De-register all WebSocket sources and release the Arcs
+        var first_error: ?anyerror = null;
         for (self.ws_sources.items) |route_source| {
             if (self.ws_connection) |*connection| {
-                try connection.close(route_source.route_path);
+                connection.close(route_source.route_path) catch |err| {
+                    if (first_error == null) first_error = err;
+                };
             }
             route_source.source.release();
         }
@@ -427,25 +430,24 @@ pub const ModuleSession = struct {
         // De-register all HTTP sources and release the Arcs
         for (self.http_sources.items) |route_source| {
             if (self.http_connection) |*connection| {
-                try connection.close(route_source.route_path);
+                connection.close(route_source.route_path) catch |err| {
+                    if (first_error == null) first_error = err;
+                };
             }
             self.allocator.free(route_source.source_name);
             route_source.source.release();
         }
         self.http_sources.clearRetainingCapacity();
 
-        var keys_to_remove: std.ArrayList([]const u8) = .empty;
-        defer keys_to_remove.deinit(self.allocator);
-
-        var iter = self.connectors.iterator();
-        while (iter.next()) |entry| {
+        while (self.connectors.count() > 0) {
+            var iter = self.connectors.iterator();
+            const entry = iter.next().?;
+            const key = entry.key_ptr.*;
             entry.value_ptr.close(self.allocator);
-            try keys_to_remove.append(self.allocator, entry.key_ptr.*);
-        }
-
-        for (keys_to_remove.items) |key| {
             _ = self.connectors.remove(key);
         }
+
+        if (first_error) |err| return err;
     }
 
     fn findAnyForwardKeyForSource(self: *Self, source_name: []const u8) ?graph_index.ForwardKey {
