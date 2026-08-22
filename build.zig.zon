@@ -34,8 +34,8 @@
     // internet connectivity.
     .dependencies = .{
         .zio = .{
-            .url = "git+https://github.com/lalinsky/zio?ref=v0.11.0#53abdf9ce5e6279e29703a39180ce1cedd8ac4ca",
-            .hash = "zio-0.11.0-xHbVVEqQGwDz0MYoQ0j7Ke0Y9E_iZVe5eLAWK4gd9U0i",
+            .url = "git+https://github.com/lalinsky/zio#df666c286380bf513dfe843f65a8133207ad7373",
+            .hash = "zio-0.17.0-xHbVVJPWJwBY3c_AkOFjUCF_pTIMnMc7ia9ujTjAfsbk",
         },
         .codspeed = .{
             .url = "git+https://github.com/notxorand/codspeed.zig#a07d3f92fbf96917cbaee0234b664062957cb8bf",
@@ -50,8 +50,8 @@
             .hash = "zwasm-1.11.0-IBbzF-auKgDerx9eX2J2vf84n0YoWX_IyWeqf3E4uNNb",
         },
         .dusty = .{
-            .url = "git+https://github.com/lalinsky/dusty#283abefe0f53730d980ac8ff2bab22b3d2226765",
-            .hash = "dusty-0.1.0-Qdw7RkP-CQBDmuJQdmomR-GaZuCFLYIGbRR6dUjfjWXD",
+            .url = "git+https://github.com/lalinsky/dusty#20fc42646a49d6461915bc069216e9e5dc9f5f1b",
+            .hash = "dusty-0.1.0-Qdw7Rlb9HAAgoTCgNH3-RQiljK-l1avjPmEDEjtdC8FT",
         },
     },
     .paths = .{
