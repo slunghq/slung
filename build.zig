@@ -50,6 +50,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const sqlite_flags: []const []const u8 = &.{
+        "-DSQLITE_THREADSAFE=1",
+        "-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=2",
+        "-fno-sanitize=undefined",
+        "-fno-sanitize=thread",
+        "-fno-omit-frame-pointer",
+    };
+
     // dusty internally imports `zio`, so ensure the module has it in scope.
     dusty.module("dusty").addImport("zio", zio.module("zio"));
 
@@ -57,10 +65,16 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zwasm", zwasm.module("zwasm"));
     exe.root_module.addImport("toml", toml.module("toml"));
     exe.root_module.addImport("dusty", dusty.module("dusty"));
+
     mod.addImport("zio", zio.module("zio"));
     mod.addImport("zwasm", zwasm.module("zwasm"));
     mod.addImport("toml", toml.module("toml"));
     mod.addImport("dusty", dusty.module("dusty"));
+    mod.addIncludePath(b.path("lib/sqlite"));
+    mod.addCSourceFile(.{
+        .file = b.path("lib/sqlite/sqlite3.c"),
+        .flags = sqlite_flags,
+    });
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");

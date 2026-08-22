@@ -10,13 +10,13 @@ dist
 # misc
 .DS_Store
 *.pem
+.direnv
 
 # debug
 *.log
 *.tmp
 *.dat
-*.idx
-zig-watch*
+.slung
 
 # local env files
 .env

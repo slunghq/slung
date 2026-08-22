@@ -1,79 +1,65 @@
 {
-  description = "Slung";
+  description = "slung";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     zig-overlay.url = "github:mitchellh/zig-overlay";
     zig-overlay.inputs.nixpkgs.follows = "nixpkgs";
+
+    zls-0-16.url = "github:zigtools/zls/0.16.0";
+    zls-0-16.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      flake-utils,
-      zig-overlay,
-    }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
+  outputs = { self, nixpkgs, flake-utils, zig-overlay
+            , zls-0-16 }:
+    flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ zig-overlay.overlays.default ];
         };
-      in
-      {
-        devShells.default = pkgs.mkShell {
-          inherit (pkgs) gcc glibc;
-          buildInputs = with pkgs; [
-            # Use Zig 0.16.0 from the overlay
-            zigpkgs."0.16.0"
 
-            # Additional libraries
-            pkg-config
+        zig = {
+          "0.16.0" = pkgs.zigpkgs."0.16.0";
+          master   = pkgs.zigpkgs.master;
+        };
 
-            # File watching for hot reload
-            entr
-            watchexec
-            glibc
-            gcc
-          ];
+        zls = {
+          "0.16.0" = zls-0-16.packages.${system}.zls;
+        };
 
-          hardeningDisable = [ "all" ];
+        mkZigShell = v: pkgs.mkShell {
+          buildInputs = [ zig.${v} ];
 
           shellHook = ''
-                        export CFLAGS="-std=gnu99 -D__STDC_WANT_IEC_60559_BFP_EXT__"
-                        export CXXFLAGS="-std=gnu99"
-                        export CC="${pkgs.gcc}/bin/gcc"
-                        export CXX="${pkgs.gcc}/bin/g++"
-
-                        echo "Zig version: $(zig version)"
-                        echo "Development environment!"
-                        echo ""
-                        echo "Commands:"
-                        echo "  zig build run         - Build and run once"
-                        echo "  zig-watch             - Watch files and auto-rebuild/run"
-                        echo "  zig-watch-test        - Watch files and auto-rebuild/test"
-                        echo ""
-
-                        # Create helper scripts for file watching
-                        cat > zig-watch << 'EOF'
-            #!/usr/bin/env bash
-            echo "Watching Zig files for changes... (Press Ctrl+C to stop)"
-            zig build run --watch
-            EOF
-                        chmod +x zig-watch
-                        alias zig-watch=./zig-watch
-
-                        cat > zig-watch-test << 'EOF'
-            #!/usr/bin/env bash
-            echo "Watching Zig files for changes (test)... (Press Ctrl+C to stop)"
-            zig build test --summary all --watch
-            EOF
-                        chmod +x zig-watch-test
-                        alias zig-watch-test=./zig-watch-test
+            echo "slung development environment loaded:"
+            echo ""
+            echo "  zig version: $(zig version)"
+            echo "  zls version: $(zls version)"
+            echo ""
           '';
+        };
+
+        mkLspShell = v: pkgs.mkShell {
+          buildInputs = [ zig.${v} zls.${v} ];
+
+          shellHook = ''
+            echo "slung development environment loaded:"
+            echo ""
+            echo "  zig version: $(zig version)"
+            echo "  zls version: $(zls version)"
+            echo ""
+          '';
+        };
+
+      in {
+        devShells = {
+          default  = mkZigShell "0.16.0";
+          "0.16.0" = mkZigShell "0.16.0";
+          master   = mkZigShell "master"; # no matching zls for master
+
+          lsp         = mkLspShell "0.16.0";
         };
       }
     );
