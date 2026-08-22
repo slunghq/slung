@@ -180,12 +180,12 @@ pub fn source(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let components_json = component_descriptors.join(",");
-    let config_json = serde_json::to_string(
-        &config_entries
-            .into_iter()
-            .collect::<serde_json::Map<String, Value>>(),
-    )
-    .expect("config JSON serialization should succeed");
+    let mut config_object = serde_json::Map::new();
+    for (key, value) in config_entries {
+        config_object.insert(key, value);
+    }
+    let config_json = serde_json::to_string(&Value::Object(config_object))
+        .expect("config JSON serialization should succeed");
     let descriptor_json = format!(
         r#"{{"name":"{}","kind":"builtin","builtin":"{}","config":{},"components":[{}]}}"#,
         source_name, builtin, config_json, components_json
@@ -346,9 +346,8 @@ fn strip_source_field_attrs(attrs: &mut Vec<Attribute>) -> Result<SourceFieldMet
 
         if attr.path().is_ident("component") {
             if let Meta::List(list) = &attr.meta {
-                let parsed = list
-                    .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                    ?;
+                let parsed =
+                    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
 
                 for item in parsed {
                     if let Meta::NameValue(name_value) = item
@@ -383,19 +382,22 @@ fn config_json_value(ty: &Type, raw: &str) -> Result<Value> {
             .parse::<u64>()
             .map(Number::from)
             .map(Value::Number)
-            .map_err(|_| syn::Error::new_spanned(ty, "invalid unsigned integer in #[config(value = ...)]")),
+            .map_err(|_| {
+                syn::Error::new_spanned(ty, "invalid unsigned integer in #[config(value = ...)]")
+            }),
         "i8" | "i16" | "i32" | "i64" | "isize" => raw
             .parse::<i64>()
             .map(Number::from)
             .map(Value::Number)
-            .map_err(|_| syn::Error::new_spanned(ty, "invalid signed integer in #[config(value = ...)]")),
+            .map_err(|_| {
+                syn::Error::new_spanned(ty, "invalid signed integer in #[config(value = ...)]")
+            }),
         "f32" | "f64" => {
-            let parsed = raw
-                .parse::<f64>()
-                .map_err(|_| syn::Error::new_spanned(ty, "invalid float in #[config(value = ...)]"))?;
-            let number = Number::from_f64(parsed).ok_or_else(|| {
-                syn::Error::new_spanned(ty, "float config value must be finite")
+            let parsed = raw.parse::<f64>().map_err(|_| {
+                syn::Error::new_spanned(ty, "invalid float in #[config(value = ...)]")
             })?;
+            let number = Number::from_f64(parsed)
+                .ok_or_else(|| syn::Error::new_spanned(ty, "float config value must be finite"))?;
             Ok(Value::Number(number))
         }
         _ => Err(syn::Error::new_spanned(

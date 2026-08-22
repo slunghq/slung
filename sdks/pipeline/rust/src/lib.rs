@@ -4,6 +4,36 @@ use std::marker::PhantomData;
 
 use std::io::Result;
 
+/// Allocate guest memory for host functions that return buffers.
+///
+/// The returned allocation is owned by the guest and remains valid for the
+/// caller to read after the host function returns.
+#[unsafe(no_mangle)]
+pub extern "C" fn slung_alloc(len: usize) -> *mut u8 {
+    if len == 0 {
+        return std::ptr::null_mut();
+    }
+
+    let layout = std::alloc::Layout::array::<u8>(len).ok();
+    layout
+        .map(|layout| unsafe { std::alloc::alloc(layout) })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Release memory previously returned by [`slung_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn slung_dealloc(ptr: *mut u8, len: usize) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+
+    if let Ok(layout) = std::alloc::Layout::array::<u8>(len) {
+        unsafe {
+            std::alloc::dealloc(ptr, layout);
+        }
+    }
+}
+
 /// Host ABI bindings — organized by function category
 pub mod host;
 

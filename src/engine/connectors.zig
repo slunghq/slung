@@ -33,14 +33,17 @@ pub const WebSocketConnector = struct {
 
     pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
         const connector = try allocator.create(WebSocketConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = if (config.remote_url) |url| try allocator.dupe(u8, url) else null;
+        errdefer if (owned_remote_url) |url| allocator.free(url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            .remote_url = if (config.remote_url) |url| try allocator.dupe(u8, url) else null,
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
             .mode = if (config.remote_url != null) .client else .server,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -91,15 +94,16 @@ pub const NATSConnector = struct {
         }
 
         const connector = try allocator.create(NATSConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = try allocator.dupe(u8, config.remote_url.?);
+        errdefer allocator.free(owned_remote_url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            // TODO: propagate some error from here as misconf could crash entire runtime
-            // in a multi-instance system
-            .remote_url = try allocator.dupe(u8, config.remote_url.?),
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -141,15 +145,16 @@ pub const TCPConnector = struct {
         }
 
         const connector = try allocator.create(TCPConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = try allocator.dupe(u8, config.remote_url.?);
+        errdefer allocator.free(owned_remote_url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            // TODO: propagate some error from here as misconf could crash entire runtime
-            // in a multi-instance system
-            .remote_url = try allocator.dupe(u8, config.remote_url.?),
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -191,13 +196,16 @@ pub const RedisConnector = struct {
         }
 
         const connector = try allocator.create(RedisConnector);
+        errdefer allocator.destroy(connector);
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+        const owned_remote_url = try allocator.dupe(u8, config.remote_url.?);
+        errdefer allocator.free(owned_remote_url);
         connector.* = .{
             .allocator = allocator,
-            .source_name = try allocator.dupe(u8, source_name),
-            .remote_url = try allocator.dupe(u8, config.remote_url.?),
+            .source_name = owned_source_name,
+            .remote_url = owned_remote_url,
         };
-        errdefer allocator.destroy(connector);
-        errdefer allocator.free(connector.source_name);
 
         return .{
             .ptr = connector,
@@ -228,6 +236,69 @@ pub const RedisConnector = struct {
     };
 };
 
+pub const HTTPConnector = struct {
+    allocator: Allocator,
+    source_name: []const u8,
+    route_path: ?[]const u8,
+    queue_arc: ?*anyopaque,
+
+    pub fn open(allocator: Allocator, source_name: []const u8, config: SourceConfig) !Connector {
+        const connector = try allocator.create(HTTPConnector);
+        errdefer allocator.destroy(connector);
+
+        const owned_source_name = try allocator.dupe(u8, source_name);
+        errdefer allocator.free(owned_source_name);
+
+        const owned_route_path = if (config.route_path) |path| blk: {
+            const owned = try allocator.dupe(u8, path);
+            errdefer allocator.free(owned);
+            break :blk owned;
+        } else null;
+
+        connector.* = .{
+            .allocator = allocator,
+            .source_name = owned_source_name,
+            .route_path = owned_route_path,
+            .queue_arc = null,
+        };
+
+        return .{
+            .ptr = connector,
+            .vtable = &vtable,
+        };
+    }
+
+    fn nextImpl(ptr: *anyopaque, allocator: Allocator) !?[]u8 {
+        const self: *HTTPConnector = @ptrCast(@alignCast(ptr));
+
+        if (self.queue_arc == null) {
+            return null; // Not connected to HTTP server yet
+        }
+
+        // This is a placeholder. The actual queue reference is set up
+        // when the connector is registered with the HTTP server in events.zig
+        _ = allocator;
+        return null;
+    }
+
+    fn closeImpl(ptr: *anyopaque, allocator: Allocator) void {
+        const self: *HTTPConnector = @ptrCast(@alignCast(ptr));
+        allocator.free(self.source_name);
+        if (self.route_path) |path| {
+            allocator.free(path);
+        }
+        if (self.queue_arc != null) {
+            // Release will be done by events.zig
+        }
+        allocator.destroy(self);
+    }
+
+    const vtable = Connector.VTable{
+        .next = nextImpl,
+        .close = closeImpl,
+    };
+};
+
 pub fn openConnector(
     allocator: Allocator,
     source_name: []const u8,
@@ -235,6 +306,8 @@ pub fn openConnector(
 ) !Connector {
     if (std.mem.eql(u8, config.connector_type, "ws")) {
         return try WebSocketConnector.open(allocator, source_name, config);
+    } else if (std.mem.eql(u8, config.connector_type, "http")) {
+        return try HTTPConnector.open(allocator, source_name, config);
     } else if (std.mem.eql(u8, config.connector_type, "nats")) {
         return try NATSConnector.open(allocator, source_name, config);
     } else if (std.mem.eql(u8, config.connector_type, "tcp")) {

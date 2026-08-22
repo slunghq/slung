@@ -14,8 +14,8 @@ const wasm_host = @import("../wasm/host.zig");
 const graph_index = @import("../wasm/index.zig");
 const wasm_module_desc = @import("../wasm/module.zig");
 const wasm_wire = @import("../wasm/wire.zig");
-const server_mod = @import("connectors/server.zig");
 const ws_mod = @import("connectors/ws.zig");
+const http_mod = @import("connectors/http.zig");
 const connectors_mod = @import("connectors.zig");
 const Connector = connectors_mod.Connector;
 const SourceConfig = connectors_mod.SourceConfig;
@@ -26,13 +26,15 @@ const loop_mod = @import("loop.zig");
 const InferenceLoop = loop_mod.InferenceLoop;
 const RuleDispatcher = loop_mod.RuleDispatcher;
 
-const WsSource = ws_mod.Source(server_mod.Server.ChannelData);
+const WsSource = @import("connectors/shared.zig").Source(ws_mod.Server.ChannelData);
+const HttpSource = @import("connectors/shared.zig").Source(http_mod.Server.RequestBody);
 
 pub const ModuleConfig = struct {
     io: std.Io,
     namespace: []const u8,
     node_id: []const u8,
-    server: *server_mod.Server,
+    server: *ws_mod.Server,
+    http_server: *http_mod.Server,
 };
 
 pub const ModuleSession = struct {
@@ -53,6 +55,9 @@ pub const ModuleSession = struct {
     source_configs: std.StringHashMap(SourceConfig),
     ws_connection: ?ws_mod.WebSocketServerConnection,
     ws_sources: std.ArrayList(WsRouteSource),
+    http_connection: ?http_mod.HTTPServerConnection,
+    http_sources: std.ArrayList(HttpRouteSource),
+    http_server: *http_mod.Server,
 
     context: Context,
     clock: Hlc,
@@ -63,6 +68,11 @@ pub const ModuleSession = struct {
         route_path: []const u8,
         source_name: []const u8,
         source: Arc(Mutex(WsSource)),
+    };
+    const HttpRouteSource = struct {
+        route_path: []const u8,
+        source_name: []const u8,
+        source: Arc(Mutex(HttpSource)),
     };
 
     pub fn init(
@@ -173,7 +183,10 @@ pub const ModuleSession = struct {
         errdefer allocator.free(session.node_id);
         session.connectors = std.StringHashMap(Connector).init(allocator);
         session.ws_connection = try ws_mod.WebSocketServerConnection.init(allocator, config.server, config.namespace);
+        session.http_connection = try http_mod.HTTPServerConnection.init(allocator, config.http_server, config.namespace);
         session.ws_sources = .empty;
+        session.http_sources = .empty;
+        session.http_server = config.http_server;
 
         return session;
     }
@@ -182,7 +195,18 @@ pub const ModuleSession = struct {
         self.closeConnectors() catch {};
         self.connectors.deinit();
         self.ws_sources.deinit(self.allocator);
+        {
+            const iter = self.http_sources.items;
+            for (iter) |item| {
+                self.allocator.free(item.source_name);
+                item.source.release();
+            }
+            self.http_sources.deinit(self.allocator);
+        }
         if (self.ws_connection) |*connection| {
+            connection.deinit();
+        }
+        if (self.http_connection) |*connection| {
             connection.deinit();
         }
         {
@@ -291,7 +315,6 @@ pub const ModuleSession = struct {
     }
 
     /// Long-lived runtime loop: waits for dirty work and runs inference cycles.
-    /// This does not currently block on I/O; it polls the dirty queue.
     pub fn runForever(self: *Self) !void {
         try self.setupConnectors();
         defer self.closeConnectors() catch {};
@@ -314,8 +337,16 @@ pub const ModuleSession = struct {
                 source_name,
                 config,
             );
-            errdefer connector.close(self.allocator);
+            var connector_tracked = false;
+            errdefer if (connector_tracked) {
+                if (self.connectors.fetchRemove(source_name)) |removed| {
+                    removed.value.close(self.allocator);
+                }
+            } else {
+                connector.close(self.allocator);
+            };
             try self.connectors.put(source_name, connector);
+            connector_tracked = true;
 
             if (std.mem.eql(u8, config.connector_type, "ws") and config.remote_url == null) {
                 const route_path = config.route_path orelse source_name;
@@ -336,6 +367,7 @@ pub const ModuleSession = struct {
 
                 if (self.ws_connection) |*connection| {
                     try connection.listen(route_path, source_arc);
+                    errdefer connection.close(route_path) catch {};
                     const source_arc_clone = source_arc.clone();
                     errdefer source_arc_clone.release();
                     try self.ws_sources.append(self.allocator, .{
@@ -346,31 +378,76 @@ pub const ModuleSession = struct {
                 }
                 source_arc.release();
             }
+
+            if (std.mem.eql(u8, config.connector_type, "http")) {
+                const route_path = config.route_path orelse source_name;
+                const forward_key = self.findAnyForwardKeyForSource(source_name) orelse return error.SourceForwardMappingNotFound;
+
+                const source_arc = try Arc(Mutex(HttpSource)).init(self.allocator, Mutex(HttpSource).init(.{
+                    .allocator = self.allocator,
+                    .namespace = self.namespace,
+                    .node_id = self.node_id,
+                    .entity_id = forward_key.entity,
+                    .component_id = forward_key.component,
+                    .lww_store = self.lww_store.clone(),
+                    .dirty_queue = self.dirty_queue.clone(),
+                    .clock = &self.clock,
+                    .data = null,
+                }, self.context.io));
+                errdefer source_arc.release();
+
+                if (self.http_connection) |*connection| {
+                    try connection.listen(route_path, source_arc);
+                    errdefer connection.close(route_path) catch {};
+                    const source_arc_clone = source_arc.clone();
+                    errdefer source_arc_clone.release();
+                    const duped_name = try self.allocator.dupe(u8, source_name);
+                    errdefer self.allocator.free(duped_name);
+                    try self.http_sources.append(self.allocator, .{
+                        .route_path = route_path,
+                        .source_name = duped_name,
+                        .source = source_arc_clone,
+                    });
+                }
+                source_arc.release();
+            }
         }
     }
 
     fn closeConnectors(self: *Self) !void {
         // De-register all WebSocket sources and release the Arcs
+        var first_error: ?anyerror = null;
         for (self.ws_sources.items) |route_source| {
             if (self.ws_connection) |*connection| {
-                try connection.close(route_source.route_path);
+                connection.close(route_source.route_path) catch |err| {
+                    if (first_error == null) first_error = err;
+                };
             }
             route_source.source.release();
         }
         self.ws_sources.clearRetainingCapacity();
 
-        var keys_to_remove: std.ArrayList([]const u8) = .empty;
-        defer keys_to_remove.deinit(self.allocator);
-
-        var iter = self.connectors.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.close(self.allocator);
-            try keys_to_remove.append(self.allocator, entry.key_ptr.*);
+        // De-register all HTTP sources and release the Arcs
+        for (self.http_sources.items) |route_source| {
+            if (self.http_connection) |*connection| {
+                connection.close(route_source.route_path) catch |err| {
+                    if (first_error == null) first_error = err;
+                };
+            }
+            self.allocator.free(route_source.source_name);
+            route_source.source.release();
         }
+        self.http_sources.clearRetainingCapacity();
 
-        for (keys_to_remove.items) |key| {
+        while (self.connectors.count() > 0) {
+            var iter = self.connectors.iterator();
+            const entry = iter.next().?;
+            const key = entry.key_ptr.*;
+            entry.value_ptr.close(self.allocator);
             _ = self.connectors.remove(key);
         }
+
+        if (first_error) |err| return err;
     }
 
     fn findAnyForwardKeyForSource(self: *Self, source_name: []const u8) ?graph_index.ForwardKey {
@@ -391,6 +468,17 @@ pub const ModuleSession = struct {
             if (guard.get().data) |channel_data| {
                 work_done = true;
                 try self.ingestSourceData(ws_route.source_name, channel_data.data);
+                guard.get().data = null;
+            }
+        }
+
+        for (self.http_sources.items) |http_route| {
+            var guard = http_route.source.getMut().lock();
+            defer guard.deinit();
+            if (guard.get().data) |request_body| {
+                work_done = true;
+                try self.ingestSourceData(http_route.source_name, request_body.data);
+                guard.get().allocator.free(request_body.data);
                 guard.get().data = null;
             }
         }
@@ -581,9 +669,14 @@ fn routePathForSourceConfig(
     connector_type: []const u8,
     config: std.json.Value,
 ) !?[]const u8 {
-    if (!std.mem.eql(u8, connector_type, "ws")) return null;
-    const raw_path = jsonObjectString(config, "path") orelse return null;
-    return try allocator.dupe(u8, std.mem.trimStart(u8, raw_path, "/"));
+    if (!std.mem.eql(u8, connector_type, "ws") and !std.mem.eql(u8, connector_type, "http")) return null;
+    if (std.mem.eql(u8, connector_type, "ws")) {
+        const raw_path = jsonObjectString(config, "path") orelse return null;
+        return try allocator.dupe(u8, std.mem.trimStart(u8, raw_path, "/"));
+    } else {
+        const raw_path = jsonObjectString(config, "endpoint") orelse return null;
+        return try allocator.dupe(u8, std.mem.trimStart(u8, raw_path, "/"));
+    }
 }
 
 fn remoteUrlForSourceConfig(

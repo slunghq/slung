@@ -4,8 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const benchmark_optimize: std.builtin.OptimizeMode = .ReleaseFast;
+    const skip_dusty = b.option(bool, "skip_dusty", "Skip dusty dependency (for benches)") orelse false;
 
     const mod = b.addModule("slung", .{ .root_source_file = b.path("src/slung.zig"), .target = target });
+    const mod_opts = b.addOptions();
+    mod_opts.addOption(bool, "enable_connectors", !skip_dusty);
+    mod.addOptions("build_options", mod_opts);
+
+    const exe_opts = b.addOptions();
+    exe_opts.addOption(bool, "enable_connectors", true);
 
     const exe = b.addExecutable(.{
         .name = "slung",
@@ -16,6 +23,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "slung", .module = mod }},
         }),
     });
+    exe.root_module.addOptions("build_options", exe_opts);
 
     const zio = b.dependency("zio", .{
         .target = target,
@@ -69,11 +77,15 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
+    mod_tests.root_module.addOptions("build_options", mod_opts);
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
+
+    const benches_opts = b.addOptions();
+    benches_opts.addOption(bool, "enable_connectors", !skip_dusty);
 
     const benches_exe = b.addExecutable(.{
         .name = "benches",
@@ -84,8 +96,14 @@ pub fn build(b: *std.Build) void {
             .imports = &.{},
         }),
     });
+    benches_exe.root_module.addOptions("build_options", benches_opts);
     benches_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
+    benches_exe.root_module.addImport("zio", zio.module("zio"));
     benches_exe.root_module.addImport("zwasm", zwasm.module("zwasm"));
+    if (!skip_dusty) {
+        benches_exe.root_module.addImport("dusty", dusty.module("dusty"));
+        dusty.module("dusty").addImport("zio", zio.module("zio"));
+    }
 
     const benches_run_step = b.step("benches", "Run the benches benchmark");
 

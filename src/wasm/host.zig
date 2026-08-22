@@ -10,19 +10,22 @@
 const std = @import("std");
 
 const zwasm = @import("zwasm");
+const build_options = @import("build_options");
 
 pub const generic = @import("host_abi/generic.zig");
-pub const http = @import("host_abi/http.zig");
+pub const http = if (build_options.enable_connectors) @import("host_abi/http.zig") else null;
 pub const queue = @import("host_abi/queue.zig");
 pub const tcp_udp = @import("host_abi/tcp_udp.zig");
-pub const ws = @import("host_abi/ws.zig");
+pub const ws = if (build_options.enable_connectors) @import("host_abi/ws.zig") else null;
 
 fn buildHostImports(allocator: std.mem.Allocator, context: usize) !std.ArrayList(zwasm.HostFnEntry) {
     var host_fns: std.ArrayList(zwasm.HostFnEntry) = .empty;
 
     try generic.appendHostFunctions(&host_fns, allocator, context);
-    try http.appendHostFunctions(&host_fns, allocator, context);
-    try ws.appendHostFunctions(&host_fns, allocator, context);
+    if (build_options.enable_connectors) {
+        try @import("host_abi/http.zig").appendHostFunctions(&host_fns, allocator, context);
+        try @import("host_abi/ws.zig").appendHostFunctions(&host_fns, allocator, context);
+    }
     try tcp_udp.appendHostFunctions(&host_fns, allocator, context);
     try queue.appendHostFunctions(&host_fns, allocator, context);
 

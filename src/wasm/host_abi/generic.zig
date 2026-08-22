@@ -72,7 +72,7 @@ pub fn slung_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
 
     const value_bytes = try out.toOwnedSlice();
     defer ctx.allocator.free(value_bytes);
-    const guest_data_ptr = try allocateInGuestMemory(ctx.module, value_bytes);
+    const guest_data_ptr = try allocateInGuestMemory(vm, ctx.module, value_bytes);
 
     try writeGuestU32(ctx.module, out_ptr, @intCast(guest_data_ptr));
     try writeGuestU32(ctx.module, out_len, @intCast(value_bytes.len));
@@ -210,9 +210,25 @@ pub fn slung_yield(ctx_ptr: *anyopaque, context: usize) anyerror!void {
 }
 
 /// Allocate a buffer in guest memory and copy data into it.
-fn allocateInGuestMemory(module: *zwasm.WasmModule, data: []const u8) !u32 {
-    const guest_buffer_offset: u32 = 0x10000;
+fn allocateInGuestMemory(vm: *zwasm.Vm, module: *zwasm.WasmModule, data: []const u8) !u32 {
+    if (data.len == 0) return 0;
 
+    var results = [_]u64{0};
+    if (module.instance.getExportFunc("slung_alloc") != null) {
+        try vm.invoke(&module.instance, "slung_alloc", &.{data.len}, results[0..]);
+        const guest_buffer_offset: u32 = @intCast(results[0]);
+        if (guest_buffer_offset == 0) return error.GuestAllocationFailed;
+        try module.memoryWrite(guest_buffer_offset, data);
+        return guest_buffer_offset;
+    }
+
+    // Legacy modules without slung_alloc receive a fresh page range outside
+    // their current linear memory instead of using a fixed heap address.
+    const page_size = 64 * 1024;
+    const pages: u32 = @intCast((data.len + page_size - 1) / page_size);
+    const memory = try module.instance.getMemory(0);
+    const old_pages = try memory.grow(pages);
+    const guest_buffer_offset = old_pages * page_size;
     try module.memoryWrite(guest_buffer_offset, data);
 
     return guest_buffer_offset;
