@@ -17,7 +17,7 @@ pub fn main(init: std.process.Init) !void {
     _ = it.next();
     const cmd = it.next() orelse {
         usage();
-        return error.InvalidArguments;
+        return;
     };
 
     if (std.mem.eql(u8, cmd, "run")) {
@@ -26,7 +26,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     usage();
-    return error.InvalidArguments;
+    return;
 }
 
 fn usage() void {
@@ -51,26 +51,41 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, it: anytype) !void {
 
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--module")) {
-            module_path = it.next() orelse return error.InvalidArguments;
+            module_path = it.next() orelse {
+                std.debug.print("Missing module path.\n", .{});
+                std.process.exit(1);
+            };
         } else if (std.mem.eql(u8, arg, "--namespace")) {
-            namespace = it.next() orelse return error.InvalidArguments;
+            namespace = it.next() orelse {
+                std.debug.print("Missing namespace value.\n", .{});
+                std.process.exit(1);
+            };
         } else if (std.mem.eql(u8, arg, "--node-id")) {
-            node_id = it.next() orelse return error.InvalidArguments;
+            node_id = it.next() orelse {
+                std.debug.print("Missing node id.\n", .{});
+                std.process.exit(1);
+            };
         } else if (std.mem.eql(u8, arg, "--ws-port")) {
-            const v = it.next() orelse return error.InvalidArguments;
+            const v = it.next() orelse {
+                std.debug.print("Missing WebSocket port.\n", .{});
+                std.process.exit(1);
+            };
             ws_port = try std.fmt.parseInt(u16, v, 10);
         } else if (std.mem.eql(u8, arg, "--http-port")) {
-            const v = it.next() orelse return error.InvalidArguments;
+            const v = it.next() orelse {
+                std.debug.print("Missing HTTP port.\n", .{});
+                std.process.exit(1);
+            };
             http_port = try std.fmt.parseInt(u16, v, 10);
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             usage();
-            return;
+            std.process.exit(0);
         } else {
-            return error.InvalidArguments;
+            std.process.exit(1);
         }
     }
 
-    const module_path_resolved = module_path orelse return error.InvalidArguments;
+    const module_path_resolved = module_path orelse return;
 
     const wasm_bytes = try readFile(allocator, io, module_path_resolved);
     defer allocator.free(wasm_bytes);
