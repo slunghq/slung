@@ -88,9 +88,10 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const mod_tests = b.addTest(.{
-        .root_module = mod,
-    });
+    const mod_tests = b.addTest(.{ .root_module = mod, .test_runner = .{
+        .path = b.path("test_runner.zig"),
+        .mode = .simple,
+    } });
     mod_tests.root_module.addOptions("build_options", mod_opts);
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
