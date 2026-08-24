@@ -88,7 +88,7 @@ Or send individual webhooks manually:
 
 ```bash
 # Inventory update (normal stock)
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{
     "sku": "WIDGET-001",
@@ -96,7 +96,7 @@ curl -X POST http://localhost:2074/api/inventory \
   }'
 
 # Inventory update (low stock - triggers alert)
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{
     "sku": "GADGET-002",
@@ -104,7 +104,7 @@ curl -X POST http://localhost:2074/api/inventory \
   }'
 
 # Order event
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{
     "order_id": "ORD-2024-001",
@@ -113,7 +113,7 @@ curl -X POST http://localhost:2074/api/inventory \
   }'
 
 # Critical stock (< 20 units - triggers emergency alert)
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{
     "sku": "CRITICAL-003",
@@ -203,7 +203,7 @@ The exact messages come from `eprintln!` calls in the rules, which log to stderr
 
 ### Scenario 1: Normal Stock
 ```bash
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{"sku": "NORMAL", "quantity": 500}'
 ```
@@ -211,7 +211,7 @@ curl -X POST http://localhost:2074/api/inventory \
 
 ### Scenario 2: Low Stock Alert
 ```bash
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{"sku": "LOW", "quantity": 30}'
 ```
@@ -219,7 +219,7 @@ curl -X POST http://localhost:2074/api/inventory \
 
 ### Scenario 3: Critical Stock
 ```bash
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{"sku": "CRITICAL", "quantity": 10}'
 ```
@@ -227,7 +227,7 @@ curl -X POST http://localhost:2074/api/inventory \
 
 ### Scenario 4: Order Processing
 ```bash
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{"order_id": "ORD-123", "sku": "X", "quantity": 10}'
 ```
@@ -235,7 +235,7 @@ curl -X POST http://localhost:2074/api/inventory \
 
 ### Scenario 5: Invalid Payload
 ```bash
-curl -X POST http://localhost:2074/api/inventory \
+curl -X POST http://localhost:2074/test_ns/api/inventory \
   -H "Content-Type: application/json" \
   -d '{"invalid": "data"}'
 ```
@@ -243,7 +243,7 @@ curl -X POST http://localhost:2074/api/inventory \
 
 ### Scenario 6: Wrong Endpoint
 ```bash
-curl -X POST http://localhost:2074/api/unknown \
+curl -X POST http://localhost:2074/test_ns/api/unknown \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
