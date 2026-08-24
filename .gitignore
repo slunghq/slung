@@ -16,7 +16,7 @@ dist
 *.log
 *.tmp
 *.dat
-.slung
+*.db
 
 # local env files
 .env
