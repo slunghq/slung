@@ -8,6 +8,8 @@ const Arc = @import("../../primitives/arc.zig").Arc;
 const Mutex = @import("../../primitives/mutex.zig").Mutex;
 const Source = @import("shared.zig").Source;
 
+const log = std.log.scoped(.slung);
+
 pub const HTTPServerConnection = struct {
     allocator: Allocator,
     namespace: []const u8,
@@ -95,7 +97,7 @@ pub const Server = struct {
         const ip = try std.Io.net.IpAddress.parse("0.0.0.0", self.config.port);
         const addr: http.Address = .{ .ip = ip };
 
-        std.log.info("HTTP webhook listener on http://0.0.0.0:{d}", .{self.config.port});
+        log.info("HTTP webhook listening on http://0.0.0.0:{d}", .{self.config.port});
         try server.listen(addr);
     }
 };
