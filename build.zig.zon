@@ -42,8 +42,8 @@
             .hash = "codspeed-0.0.1-LFS0qLw9CAB0elvjixVsch0gkxVPzH16rB0h1X0LITQf",
         },
         .toml = .{
-            .url = "git+https://github.com/notxorand/zig-toml#cf50bd59c6276fb2b6d34b8d71d35486eecc719c",
-            .hash = "toml-0.3.0-bV14Bd-EAQBKoXhpYft303BtA2vgLNlxntUCIWgRUl46",
+            .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.16#8685923e32e8b8a795eb2715684236975a70faed",
+            .hash = "toml-0.3.0-bV14BRmKAQAWR0FT0KUKFwVJTImaFhWjSe6HfSMtNZOH",
         },
         .zwasm = .{
             .url = "https://github.com/clojurewasm/zwasm/archive/refs/tags/v1.11.0.tar.gz",

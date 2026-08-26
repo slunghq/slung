@@ -1,6 +1,7 @@
 const std = @import("std");
 const zio = @import("zio");
 const slung = @import("slung");
+const DeploymentServer = @import("deployment.zig").Server;
 
 pub const InstanceConfig = struct {
     module_path: ?[]const u8,
@@ -10,6 +11,13 @@ pub const InstanceConfig = struct {
     http_port: u16,
 
     pub fn deinit(_: *InstanceConfig, _: std.mem.Allocator) void {}
+};
+
+pub const DeploymentConfig = struct {
+    node_id: []const u8,
+    discovery_port: u16 = 2072,
+    ws_port: u16 = 2073,
+    http_port: u16 = 2074,
 };
 
 pub const Supervisor = struct {
@@ -23,14 +31,142 @@ pub const Supervisor = struct {
         };
     }
 
-    /// Run one managed runtime instance until it exits.
-    ///
-    /// The instance boundary is deliberately separate from CLI parsing so the
-    /// supervisor can own multiple instances in a future process model.
-    pub fn run(self: *Supervisor, config: InstanceConfig) !void {
+    /// Run the deployment host until it exits. The host does not load a module.
+    pub fn run(self: *Supervisor, config: DeploymentConfig) !void {
+        const host = try DeploymentHost.start(self.allocator, self.io, config);
+        defer host.deinit();
+        try host.wait();
+    }
+
+    /// Run one managed development module instance until it exits.
+    pub fn runDev(self: *Supervisor, config: InstanceConfig) !void {
         var instance = try Instance.start(self.allocator, self.io, config);
         defer instance.deinit();
         try instance.wait();
+    }
+};
+
+const DeploymentHost = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    node_id: []const u8,
+    deployment_server: *DeploymentServer,
+    ws_server: *slung.engine.ws.Server,
+    http_server: *slung.engine.http.Server,
+    sessions: std.StringHashMapUnmanaged(*slung.engine.ModuleSession) = .empty,
+    retired_sessions: std.ArrayListUnmanaged(*slung.engine.ModuleSession) = .empty,
+    group: zio.Group,
+
+    fn start(allocator: std.mem.Allocator, io: std.Io, config: DeploymentConfig) !*DeploymentHost {
+        const host = try allocator.create(DeploymentHost);
+        errdefer allocator.destroy(host);
+
+        const deployment_server = try allocator.create(DeploymentServer);
+        errdefer allocator.destroy(deployment_server);
+        deployment_server.* = DeploymentServer.init(allocator, io, .{
+            .port = config.discovery_port,
+            .on_deploy = onDeploy,
+            .on_deploy_context = host,
+        });
+        errdefer deployment_server.deinit();
+
+        const ws_server = try allocator.create(slung.engine.ws.Server);
+        errdefer allocator.destroy(ws_server);
+        ws_server.* = try slung.engine.ws.Server.init(allocator, io, .{ .port = config.ws_port });
+        errdefer ws_server.deinit();
+
+        const http_server = try allocator.create(slung.engine.http.Server);
+        errdefer allocator.destroy(http_server);
+        http_server.* = try slung.engine.http.Server.init(allocator, io, .{ .port = config.http_port });
+        errdefer http_server.deinit();
+
+        var group: zio.Group = .init;
+        errdefer group.cancel();
+        try group.spawn(runDeployment, .{deployment_server});
+        try group.spawn(runWebSocket, .{ws_server});
+        try group.spawn(runHttp, .{http_server});
+
+        host.* = .{
+            .allocator = allocator,
+            .io = io,
+            .node_id = config.node_id,
+            .deployment_server = deployment_server,
+            .ws_server = ws_server,
+            .http_server = http_server,
+            .group = group,
+        };
+
+        std.log.scoped(.slung).info("starting deployment host\n  node id: {s}", .{config.node_id});
+        return host;
+    }
+
+    fn wait(self: *DeploymentHost) !void {
+        try self.group.wait();
+    }
+
+    fn deinit(self: *DeploymentHost) void {
+        self.group.cancel();
+        var sessions = self.sessions.iterator();
+        while (sessions.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.free(entry.key_ptr.*);
+        }
+        for (self.retired_sessions.items) |session| session.deinit();
+        self.sessions.deinit(self.allocator);
+        self.retired_sessions.deinit(self.allocator);
+        self.deployment_server.deinit();
+        self.allocator.destroy(self.deployment_server);
+        self.ws_server.deinit();
+        self.allocator.destroy(self.ws_server);
+        self.http_server.deinit();
+        self.allocator.destroy(self.http_server);
+        self.allocator.destroy(self);
+    }
+
+    fn onDeploy(context: *anyopaque, deployment: *const @import("deployment.zig").Deployment) anyerror!void {
+        const self: *DeploymentHost = @ptrCast(@alignCast(context));
+        const module_config = slung.engine.ModuleConfig{
+            .io = self.io,
+            .namespace = deployment.namespace,
+            .node_id = self.node_id,
+            .server = self.ws_server,
+            .http_server = self.http_server,
+        };
+        if (self.sessions.fetchRemove(deployment.namespace)) |old| {
+            old.value.stop() catch {};
+            try self.retired_sessions.append(self.allocator, old.value);
+            self.allocator.free(old.key);
+        }
+
+        const session = try slung.engine.ModuleSession.init(
+            self.allocator,
+            self.io,
+            deployment.wasm,
+            module_config,
+        );
+        errdefer session.deinit();
+
+        const namespace = try self.allocator.dupe(u8, deployment.namespace);
+        errdefer self.allocator.free(namespace);
+        try self.sessions.put(self.allocator, namespace, session);
+        errdefer _ = self.sessions.remove(namespace);
+        try self.group.spawn(runSession, .{session});
+    }
+
+    fn runDeployment(server: *DeploymentServer) !void {
+        try server.serve();
+    }
+
+    fn runWebSocket(server: *slung.engine.ws.Server) !void {
+        try server.serve();
+    }
+
+    fn runHttp(server: *slung.engine.http.Server) !void {
+        try server.serve();
+    }
+
+    fn runSession(session: *slung.engine.ModuleSession) !void {
+        try session.runForever();
     }
 };
 
@@ -49,6 +185,10 @@ const Instance = struct {
         config: InstanceConfig,
     ) !Instance {
         const module_path = config.module_path orelse return error.MissingModulePath;
+        std.log.scoped(.slung).info(
+            "Starting... Module loaded:\n  namespace: {s}\n  node id:   {s}\n  module:    {s}",
+            .{ config.namespace, config.node_id, module_path },
+        );
         const wasm_bytes = try readFile(allocator, io, module_path);
         errdefer allocator.free(wasm_bytes);
 
@@ -67,7 +207,6 @@ const Instance = struct {
 
         try group.spawn(runWebSocket, .{server});
         try group.spawn(runHttp, .{http_server});
-
         const module_config = slung.engine.ModuleConfig{
             .io = io,
             .namespace = config.namespace,
