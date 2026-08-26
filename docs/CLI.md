@@ -85,7 +85,7 @@ ws_port = 2073
 http_port = 2074
 
 [storage]
-path = ".slung/data.db"
+path = ".slung"
 durability = "strict"
 
 [observability]
