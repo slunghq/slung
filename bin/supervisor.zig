@@ -3,6 +3,47 @@ const zio = @import("zio");
 const slung = @import("slung");
 const DeploymentServer = @import("deployment.zig").Server;
 
+const SessionLoad = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    wasm: []const u8,
+    config: slung.engine.ModuleConfig,
+    session: ?*slung.engine.ModuleSession = null,
+    err: ?anyerror = null,
+
+    fn run(self: *@This()) void {
+        self.session = slung.engine.ModuleSession.init(
+            self.allocator,
+            self.io,
+            self.wasm,
+            self.config,
+        ) catch |err| {
+            self.err = err;
+            return;
+        };
+    }
+};
+
+fn loadSessionOnThread(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    wasm: []const u8,
+    config: slung.engine.ModuleConfig,
+) !*slung.engine.ModuleSession {
+    var load = SessionLoad{
+        .allocator = allocator,
+        .io = io,
+        .wasm = wasm,
+        .config = config,
+    };
+
+    var thread = try std.Thread.spawn(.{}, SessionLoad.run, .{&load});
+    thread.join();
+
+    if (load.err) |err| return err;
+    return load.session orelse error.ModuleLoadFailed;
+}
+
 pub const InstanceConfig = struct {
     module_path: ?[]const u8,
     namespace: []const u8,
@@ -142,7 +183,7 @@ const DeploymentHost = struct {
             log.info("First deployment: {s} (namespace: {s})", .{ deployment.module_name, deployment.namespace });
         }
 
-        const session = try slung.engine.ModuleSession.init(
+        const session = try loadSessionOnThread(
             self.allocator,
             self.io,
             deployment.wasm,

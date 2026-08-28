@@ -41,6 +41,7 @@ pub const ModuleSession = struct {
     allocator: Allocator,
     io: std.Io,
     wasm_module: *zwasm.WasmModule,
+    owned_wasm_bytes: []u8,
     namespace: []const u8,
     node_id: []const u8,
 
@@ -150,12 +151,18 @@ pub const ModuleSession = struct {
         errdefer allocator.free(env_imports.source.host_fns);
         session.host_fns = env_imports.source.host_fns;
 
+        const owned_wasm_bytes = try allocator.dupe(u8, wasm_bytes);
+        var wasm_bytes_transferred = false;
+        errdefer if (!wasm_bytes_transferred) allocator.free(owned_wasm_bytes);
+
         session.wasm_module = try zwasm.WasmModule.loadWasiWithImports(
             allocator,
-            wasm_bytes,
+            owned_wasm_bytes,
             &[_]zwasm.ImportEntry{env_imports},
             .{},
         );
+        session.owned_wasm_bytes = owned_wasm_bytes;
+        wasm_bytes_transferred = true;
         errdefer session.wasm_module.deinit();
 
         session.context.module = session.wasm_module;
@@ -261,6 +268,7 @@ pub const ModuleSession = struct {
         }
 
         self.wasm_module.deinit();
+        self.allocator.free(self.owned_wasm_bytes);
 
         if (self.host_fns) |host_fns| {
             self.allocator.free(host_fns);
