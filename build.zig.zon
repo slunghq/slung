@@ -46,8 +46,8 @@
             .hash = "toml-0.3.0-bV14BRmKAQAWR0FT0KUKFwVJTImaFhWjSe6HfSMtNZOH",
         },
         .zwasm = .{
-            .url = "https://github.com/clojurewasm/zwasm/archive/refs/tags/v1.11.0.tar.gz",
-            .hash = "zwasm-1.11.0-IBbzF-auKgDerx9eX2J2vf84n0YoWX_IyWeqf3E4uNNb",
+            .url = "https://github.com/clojurewasm/zwasm/archive/refs/tags/v2.5.0.tar.gz",
+            .hash = "zwasm-2.5.0-FT1Fv4KPkgCaKsDmsn05BTYsoEhH7RCUreSX8a3mwFha",
         },
         .dusty = .{
             .url = "git+https://github.com/lalinsky/dusty#20fc42646a49d6461915bc069216e9e5dc9f5f1b",

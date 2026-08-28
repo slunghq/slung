@@ -48,7 +48,7 @@ fn deinitIndices(
 }
 
 fn invokeMapper(
-    wasm_module: *zwasm.WasmModule,
+    wasm_module: *zwasm.Instance,
     allocator: Allocator,
     mapper_name: []const u8,
     raw_input: []const u8,
@@ -57,33 +57,39 @@ fn invokeMapper(
     const output_offset: u32 = 20000;
     const output_len_offset: u32 = 30000;
 
-    try wasm_module.memoryWrite(input_offset, raw_input);
+    const memory = wasm_module.memory() orelse return error.NoMemory;
+    @memcpy(try memory.sliceAt(input_offset, @intCast(raw_input.len)), raw_input);
 
     var output_len_init: [4]u8 = undefined;
     std.mem.writeInt(u32, &output_len_init, 0, .little);
-    try wasm_module.memoryWrite(output_len_offset, &output_len_init);
+    @memcpy(try memory.sliceAt(output_len_offset, 4), &output_len_init);
 
-    var results = [_]u64{0};
+    var results = [_]zwasm.Value{.fromI32(0)};
     try wasm_module.invoke(
         mapper_name,
-        &.{ input_offset, raw_input.len, output_offset, output_len_offset },
+        &.{
+            .fromI32(@intCast(input_offset)),
+            .fromI32(@intCast(raw_input.len)),
+            .fromI32(@intCast(output_offset)),
+            .fromI32(@intCast(output_len_offset)),
+        },
         results[0..],
     );
 
-    const status: i32 = @bitCast(@as(u32, @intCast(results[0])));
+    const status = results[0].i32;
     if (status != 0) {
         return error.MapperFailed;
     }
 
-    const output_len_bytes = try wasm_module.memoryRead(allocator, output_len_offset, 4);
+    const output_len_bytes = try allocator.dupe(u8, try memory.sliceAt(output_len_offset, 4));
     defer allocator.free(output_len_bytes);
     const output_len = std.mem.readInt(u32, output_len_bytes[0..4], .little);
 
-    return try wasm_module.memoryRead(allocator, output_offset, output_len);
+    return try allocator.dupe(u8, try memory.sliceAt(output_offset, output_len));
 }
 
 const WasmRuleDispatcher = struct {
-    module: *zwasm.WasmModule,
+    module: *zwasm.Instance,
     reverse: *graph_index.ReverseIndex,
     context: *Context,
 
@@ -91,15 +97,9 @@ const WasmRuleDispatcher = struct {
         const self: *WasmRuleDispatcher = @ptrCast(@alignCast(ptr));
         const reverse = self.reverse.get(rule_id) orelse return error.RuleNotFound;
         self.context.setCurrentExecution(entity_id, rule_id);
-        var results = [_]u64{0};
-        self.module.invoke(reverse.entrypoint, &.{}, &results) catch {
-            if (self.module.getWasiExitCode()) |code| {
-                if (code != 0) return error.WasiNonZeroExit;
-                return 0;
-            }
-            return error.WasmTrap;
-        };
-        return @bitCast(@as(u32, @truncate(results[0])));
+        var results = [_]zwasm.Value{.fromI32(0)};
+        self.module.invoke(reverse.entrypoint, &.{}, &results) catch return error.WasmTrap;
+        return results[0].i32;
     }
 };
 
@@ -153,7 +153,13 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
     }
 
     var clock = Hlc.init(1, io);
-    var wasm_module: *zwasm.WasmModule = undefined;
+    var engine = try zwasm.Engine.init(allocator, .{});
+    defer engine.deinit();
+    var wasm_mod = try engine.compile(wasm_bytes);
+    defer wasm_mod.deinit();
+    var linker = engine.linker();
+    defer linker.deinit();
+
     var context = Context.init(
         allocator,
         io,
@@ -163,24 +169,18 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
         &forward,
         &reverse,
         &clock,
-        wasm_module,
+        undefined,
         "bench_ns",
         "node-1",
     );
 
-    const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&context));
-    defer allocator.free(env_imports.source.host_fns);
-
-    wasm_module = try zwasm.WasmModule.loadWasiWithImports(
-        allocator,
-        wasm_bytes,
-        &[_]zwasm.ImportEntry{env_imports},
-        .{},
-    );
+    try wasm_host.defineHostFunctions(&linker, @ptrCast(&context));
+    try linker.defineWasi(.{ .io = io });
+    var wasm_module = try linker.instantiate(&wasm_mod, .{});
     defer wasm_module.deinit();
-    context.module = wasm_module;
+    context.module = &wasm_module;
 
-    try wasm_wire.wire(allocator, wasm_module, &forward, &reverse, "bench_ns", "e2e_local.wasm");
+    try wasm_wire.wire(allocator, &wasm_mod, &wasm_module, &forward, &reverse, "bench_ns", "e2e_local.wasm");
 
     var reading_key_opt: ?graph_index.ForwardKey = null;
     var reading_mapper_opt: ?[]const u8 = null;
@@ -198,7 +198,7 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
     const reading_mapper = reading_mapper_opt orelse return error.MissingReadingMapper;
 
     var dispatcher = WasmRuleDispatcher{
-        .module = wasm_module,
+        .module = &wasm_module,
         .reverse = &reverse,
         .context = &context,
     };
@@ -213,7 +213,7 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
     var total_fired: usize = 0;
 
     for (0..n_iters) |_| {
-        const mapped = try invokeMapper(wasm_module, allocator, reading_mapper, input);
+        const mapped = try invokeMapper(&wasm_module, allocator, reading_mapper, input);
         defer allocator.free(mapped);
 
         var key_buf: [128]u8 = undefined;

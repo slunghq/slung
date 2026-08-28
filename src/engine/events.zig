@@ -40,7 +40,10 @@ pub const ModuleConfig = struct {
 pub const ModuleSession = struct {
     allocator: Allocator,
     io: std.Io,
-    wasm_module: *zwasm.WasmModule,
+    engine: *zwasm.Engine,
+    module: *zwasm.Module,
+    linker: *zwasm.Linker,
+    wasm_module: *zwasm.Instance,
     owned_wasm_bytes: []u8,
     namespace: []const u8,
     node_id: []const u8,
@@ -62,7 +65,6 @@ pub const ModuleSession = struct {
 
     context: Context,
     clock: Hlc,
-    host_fns: ?[]const zwasm.HostFnEntry = null,
 
     const Self = @This();
     const WsRouteSource = struct {
@@ -75,6 +77,16 @@ pub const ModuleSession = struct {
         source_name: []const u8,
         source: Arc(Mutex(HttpSource)),
     };
+
+    fn memoryWrite(self: *Self, offset: u32, bytes: []const u8) !void {
+        const memory = self.wasm_module.memory() orelse return error.NoMemory;
+        @memcpy(try memory.sliceAt(offset, @intCast(bytes.len)), bytes);
+    }
+
+    fn memoryRead(self: *Self, allocator: Allocator, offset: u32, len: u32) ![]u8 {
+        const memory = self.wasm_module.memory() orelse return error.NoMemory;
+        return allocator.dupe(u8, try memory.sliceAt(offset, len));
+    }
 
     pub fn init(
         allocator: Allocator,
@@ -147,28 +159,38 @@ pub const ModuleSession = struct {
             config.node_id,
         );
 
-        const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&session.context));
-        errdefer allocator.free(env_imports.source.host_fns);
-        session.host_fns = env_imports.source.host_fns;
-
-        const owned_wasm_bytes = try allocator.dupe(u8, wasm_bytes);
-        var wasm_bytes_transferred = false;
-        errdefer if (!wasm_bytes_transferred) allocator.free(owned_wasm_bytes);
-
-        session.wasm_module = try zwasm.WasmModule.loadWasiWithImports(
-            allocator,
-            owned_wasm_bytes,
-            &[_]zwasm.ImportEntry{env_imports},
-            .{},
-        );
-        session.owned_wasm_bytes = owned_wasm_bytes;
-        wasm_bytes_transferred = true;
-        errdefer session.wasm_module.deinit();
-
+        session.engine = try allocator.create(zwasm.Engine);
+        errdefer {
+            session.engine.deinit();
+            allocator.destroy(session.engine);
+        }
+        session.engine.* = try zwasm.Engine.init(allocator, .{});
+        session.module = try allocator.create(zwasm.Module);
+        errdefer {
+            session.module.deinit();
+            allocator.destroy(session.module);
+        }
+        session.module.* = try session.engine.compile(wasm_bytes);
+        session.linker = try allocator.create(zwasm.Linker);
+        errdefer {
+            session.linker.deinit();
+            allocator.destroy(session.linker);
+        }
+        session.linker.* = session.engine.linker();
+        try wasm_host.defineHostFunctions(session.linker, @ptrCast(&session.context));
+        try session.linker.defineWasi(.{ .io = config.io });
+        session.wasm_module = try allocator.create(zwasm.Instance);
+        errdefer {
+            session.wasm_module.deinit();
+            allocator.destroy(session.wasm_module);
+        }
+        session.wasm_module.* = try session.linker.instantiate(session.module, .{});
         session.context.module = session.wasm_module;
+        session.owned_wasm_bytes = try allocator.dupe(u8, wasm_bytes);
 
         try wasm_wire.wire(
             allocator,
+            session.module,
             session.wasm_module,
             &session.forward_index,
             &session.reverse_index,
@@ -268,11 +290,14 @@ pub const ModuleSession = struct {
         }
 
         self.wasm_module.deinit();
+        self.allocator.destroy(self.wasm_module);
+        self.linker.deinit();
+        self.allocator.destroy(self.linker);
+        self.module.deinit();
+        self.allocator.destroy(self.module);
+        self.engine.deinit();
+        self.allocator.destroy(self.engine);
         self.allocator.free(self.owned_wasm_bytes);
-
-        if (self.host_fns) |host_fns| {
-            self.allocator.free(host_fns);
-        }
 
         self.allocator.free(self.namespace);
         self.allocator.free(self.node_id);
@@ -527,34 +552,34 @@ pub const ModuleSession = struct {
             const output_offset: u32 = 20000;
             const output_len_offset: u32 = 30000;
 
-            try self.wasm_module.memoryWrite(input_offset, raw_data);
+            try self.memoryWrite(input_offset, raw_data);
 
             var output_len_init: [4]u8 = undefined;
             std.mem.writeInt(u32, &output_len_init, 0, .little);
-            try self.wasm_module.memoryWrite(output_len_offset, &output_len_init);
+            try self.memoryWrite(output_len_offset, &output_len_init);
 
-            var results = [_]u64{0};
+            var results = [_]zwasm.Value{.fromI32(0)};
             self.wasm_module.invoke(
                 forward_entry.mapper,
-                &.{ input_offset, raw_data.len, output_offset, output_len_offset },
+                &.{ .fromI32(@intCast(input_offset)), .fromI32(@intCast(raw_data.len)), .fromI32(@intCast(output_offset)), .fromI32(@intCast(output_len_offset)) },
                 results[0..],
             ) catch |err| {
                 std.log.debug("Mapper invocation failed for {s}: {}", .{ forward_entry.mapper, err });
                 continue;
             };
 
-            const status: i32 = @bitCast(@as(u32, @intCast(results[0])));
+            const status: i32 = results[0].i32;
             if (status != 0) {
                 std.log.debug("Mapper {s} declined payload with status {}", .{ forward_entry.mapper, status });
                 continue;
             }
             success_count += 1;
 
-            const output_len_bytes = try self.wasm_module.memoryRead(self.allocator, output_len_offset, 4);
+            const output_len_bytes = try self.memoryRead(self.allocator, output_len_offset, 4);
             defer self.allocator.free(output_len_bytes);
             const output_len = std.mem.readInt(u32, output_len_bytes[0..4], .little);
 
-            const mapped = try self.wasm_module.memoryRead(self.allocator, output_offset, output_len);
+            const mapped = try self.memoryRead(self.allocator, output_offset, output_len);
             defer self.allocator.free(mapped);
 
             // Build LWW store key: namespace:entity:component
@@ -602,20 +627,22 @@ pub const ModuleSession = struct {
     }
 
     fn loadSourceConfigsFromModule(self: *Self) !void {
-        const exports = self.wasm_module.export_fns;
-        for (exports) |export_info| {
+        var exports = try self.module.exports(self.allocator);
+        defer exports.deinit();
+        for (exports.items) |export_info| {
             if (!std.mem.startsWith(u8, export_info.name, "__slung_source_") or
                 !std.mem.endsWith(u8, export_info.name, "_descriptor"))
             {
                 continue;
             }
 
-            var result: [1]u64 = undefined;
-            try self.wasm_module.invoke(export_info.name, &.{}, result[0..]);
-            const length: u32 = @intCast(result[0] & 0xFFFFFFFF);
-            const offset: u32 = @intCast((result[0] >> 32) & 0xFFFFFFFF);
+            var result = [_]zwasm.Value{.fromI64(0)};
+            try self.wasm_module.invoke(export_info.name, &.{}, &result);
+            const descriptor_word: u64 = @bitCast(result[0].i64);
+            const length: u32 = @truncate(descriptor_word);
+            const offset: u32 = @truncate(descriptor_word >> 32);
 
-            const bytes = try self.wasm_module.memoryRead(self.allocator, offset, length);
+            const bytes = try self.memoryRead(self.allocator, offset, length);
             defer self.allocator.free(bytes);
 
             const parsed = try std.json.parseFromSlice(
@@ -712,7 +739,7 @@ fn jsonObjectString(config: std.json.Value, key: []const u8) ?[]const u8 {
 }
 
 const WasmRuleDispatcher = struct {
-    module: *zwasm.WasmModule,
+    module: *zwasm.Instance,
     reverse: *graph_index.ReverseIndex,
     context: *Context,
 
@@ -720,15 +747,9 @@ const WasmRuleDispatcher = struct {
         const self: *WasmRuleDispatcher = @ptrCast(@alignCast(ptr));
         const reverse = self.reverse.get(rule_id) orelse return error.RuleNotFound;
         self.context.setCurrentExecution(entity_id, rule_id);
-        var results = [_]u64{0};
-        self.module.invoke(reverse.entrypoint, &.{}, &results) catch {
-            if (self.module.getWasiExitCode()) |code| {
-                if (code != 0) return error.WasiNonZeroExit;
-                return 0;
-            }
-            return error.WasmTrap;
-        };
-        return @bitCast(@as(u32, @truncate(results[0])));
+        var results = [_]zwasm.Value{.fromI32(0)};
+        self.module.invoke(reverse.entrypoint, &.{}, &results) catch return error.WasmTrap;
+        return results[0].i32;
     }
 };
 

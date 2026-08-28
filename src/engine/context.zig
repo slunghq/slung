@@ -98,8 +98,8 @@ pub const Context = struct {
     // Clock for Hlc timestamps
     clock: *Hlc,
 
-    // Wasm module for memory access from host functions
-    module: *zwasm.WasmModule,
+    // Live Wasm instance for memory access and host callbacks
+    module: *zwasm.Instance,
 
     // Current execution context (mutable per cycle)
     namespace: types.NamespaceId,
@@ -123,7 +123,7 @@ pub const Context = struct {
         forward_index: *graph_index.ForwardIndex,
         reverse_index: *graph_index.ReverseIndex,
         clock: *Hlc,
-        module: *zwasm.WasmModule,
+        module: *zwasm.Instance,
         namespace: types.NamespaceId,
         node_id: types.NodeId,
     ) Self {
