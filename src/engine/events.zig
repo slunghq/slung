@@ -368,6 +368,7 @@ pub const ModuleSession = struct {
                 if (self.ws_connection) |*connection| {
                     try connection.listen(route_path, source_arc);
                     errdefer connection.close(route_path) catch {};
+                    std.log.scoped(.slung).info("Registered route: WS /{s}/{s}", .{ self.namespace, route_path });
                     const source_arc_clone = source_arc.clone();
                     errdefer source_arc_clone.release();
                     try self.ws_sources.append(self.allocator, .{
@@ -399,6 +400,7 @@ pub const ModuleSession = struct {
                 if (self.http_connection) |*connection| {
                     try connection.listen(route_path, source_arc);
                     errdefer connection.close(route_path) catch {};
+                    std.log.scoped(.slung).info("Registered route: POST /{s}/{s}", .{ self.namespace, route_path });
                     const source_arc_clone = source_arc.clone();
                     errdefer source_arc_clone.release();
                     const duped_name = try self.allocator.dupe(u8, source_name);

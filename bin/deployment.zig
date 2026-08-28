@@ -67,7 +67,7 @@ pub const Server = struct {
         const ip = try std.Io.net.IpAddress.parse("0.0.0.0", self.config.port);
         const address: http.Address = .{ .ip = ip };
 
-        log.info("deployment server listening on http://0.0.0.0:{d}", .{self.config.port});
+        log.info("Deployment server listening on http://0.0.0.0:{d}", .{self.config.port});
         try server.listen(address);
     }
 

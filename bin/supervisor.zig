@@ -96,7 +96,7 @@ const DeploymentHost = struct {
             .group = group,
         };
 
-        std.log.scoped(.slung).info("starting deployment host\n  node id: {s}", .{config.node_id});
+        std.log.scoped(.slung).info("Starting deployment host:\n  node id: {s}", .{config.node_id});
         return host;
     }
 
@@ -132,10 +132,14 @@ const DeploymentHost = struct {
             .server = self.ws_server,
             .http_server = self.http_server,
         };
+        const log = std.log.scoped(.slung);
         if (self.sessions.fetchRemove(deployment.namespace)) |old| {
+            log.info("Redeployment: {s} (namespace: {s})", .{ deployment.module_name, deployment.namespace });
             old.value.stop() catch {};
             try self.retired_sessions.append(self.allocator, old.value);
             self.allocator.free(old.key);
+        } else {
+            log.info("First deployment: {s} (namespace: {s})", .{ deployment.module_name, deployment.namespace });
         }
 
         const session = try slung.engine.ModuleSession.init(
