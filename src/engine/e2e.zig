@@ -48,7 +48,7 @@ fn keyBuf(namespace: []const u8, entity: u32, component: u32, buf: *[64]u8) ![]c
 }
 
 fn invokeMapper(
-    wasm_module: *zwasm.WasmModule,
+    wasm_module: *zwasm.Instance,
     allocator: std.mem.Allocator,
     mapper_name: []const u8,
     raw_input: []const u8,
@@ -57,40 +57,40 @@ fn invokeMapper(
     const output_offset: u32 = 20000;
     const output_len_offset: u32 = 30000;
 
-    // Write raw input to wasm memory
-    try wasm_module.memoryWrite(input_offset, raw_input);
+    const memory = wasm_module.memory() orelse return error.NoMemory;
+    @memcpy(try memory.sliceAt(input_offset, @intCast(raw_input.len)), raw_input);
 
     // Write output_len slot (initialized to 0)
     var output_len_init: [4]u8 = undefined;
     std.mem.writeInt(u32, &output_len_init, 0, .little);
-    try wasm_module.memoryWrite(output_len_offset, &output_len_init);
+    @memcpy(try memory.sliceAt(output_len_offset, 4), &output_len_init);
 
     // Invoke mapper: mapper(input_ptr, input_len, output_ptr, output_len_ptr) -> status
-    var results = [_]u64{0};
+    var results = [_]zwasm.Value{.fromI32(0)};
     try wasm_module.invoke(
         mapper_name,
-        &.{ input_offset, raw_input.len, output_offset, output_len_offset },
+        &.{ .fromI32(@intCast(input_offset)), .fromI32(@intCast(raw_input.len)), .fromI32(@intCast(output_offset)), .fromI32(@intCast(output_len_offset)) },
         results[0..],
     );
 
-    const status: i32 = @bitCast(@as(u32, @intCast(results[0])));
+    const status: i32 = results[0].i32;
     if (status != 0) {
         return error.MapperFailed;
     }
 
     // Read output length from memory
-    const output_len_bytes = try wasm_module.memoryRead(allocator, output_len_offset, 4);
+    const output_len_bytes = try allocator.dupe(u8, try memory.sliceAt(output_len_offset, 4));
     defer allocator.free(output_len_bytes);
     const output_len = std.mem.readInt(u32, output_len_bytes[0..4], .little);
 
     // Read output from wasm memory
-    const output = try wasm_module.memoryRead(allocator, output_offset, output_len);
+    const output = try allocator.dupe(u8, try memory.sliceAt(output_offset, output_len));
 
     return output;
 }
 
 const WasmRuleDispatcher = struct {
-    module: *zwasm.WasmModule,
+    module: *zwasm.Instance,
     reverse: *graph_index.ReverseIndex,
     context: *Context,
 
@@ -98,15 +98,9 @@ const WasmRuleDispatcher = struct {
         const self: *WasmRuleDispatcher = @ptrCast(@alignCast(ptr));
         const reverse = self.reverse.get(rule_id) orelse return error.RuleNotFound;
         self.context.setCurrentExecution(entity_id, rule_id);
-        var results = [_]u64{0};
-        self.module.invoke(reverse.entrypoint, &.{}, &results) catch {
-            if (self.module.getWasiExitCode()) |code| {
-                if (code != 0) return error.WasiNonZeroExit;
-                return 0;
-            }
-            return error.WasmTrap;
-        };
-        return @bitCast(@as(u32, @truncate(results[0])));
+        var results = [_]zwasm.Value{.fromI32(0)};
+        self.module.invoke(reverse.entrypoint, &.{}, &results) catch return error.WasmTrap;
+        return results[0].i32;
     }
 };
 
@@ -159,7 +153,12 @@ test "E2E: multi-cycle cascade through rule chain" {
     }
 
     var clock = Hlc.init(1, std.testing.io);
-    var wasm_module: *zwasm.WasmModule = undefined;
+    var engine = try zwasm.Engine.init(allocator, .{});
+    defer engine.deinit();
+    var wasm_mod = try engine.compile(wasm_bytes);
+    defer wasm_mod.deinit();
+    var linker = engine.linker();
+    defer linker.deinit();
     var context = Context.init(
         allocator,
         testing.io,
@@ -169,24 +168,18 @@ test "E2E: multi-cycle cascade through rule chain" {
         &forward,
         &reverse,
         &clock,
-        wasm_module,
+        undefined,
         "test_ns",
         "node-1",
     );
 
-    const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&context));
-    defer allocator.free(env_imports.source.host_fns);
-
-    wasm_module = try zwasm.WasmModule.loadWasiWithImports(
-        allocator,
-        wasm_bytes,
-        &[_]zwasm.ImportEntry{env_imports},
-        .{},
-    );
+    try wasm_host.defineHostFunctions(&linker, @ptrCast(&context));
+    try linker.defineWasi(.{ .io = testing.io });
+    var wasm_module = try linker.instantiate(&wasm_mod, .{});
     defer wasm_module.deinit();
-    context.module = wasm_module;
+    context.module = &wasm_module;
 
-    try wasm_wire.wire(allocator, wasm_module, &forward, &reverse, "test_ns", "e2e_local.wasm");
+    try wasm_wire.wire(allocator, &wasm_mod, &wasm_module, &forward, &reverse, "test_ns", "e2e_local.wasm");
 
     try testing.expectEqual(@as(usize, 3), forward.count());
     try testing.expectEqual(@as(usize, 2), reverse.count());
@@ -230,7 +223,7 @@ test "E2E: multi-cycle cascade through rule chain" {
         const reading_store_key = try keyBuf("test_ns", reading_key.entity, reading_key.component, &key_buf_reading);
 
         const raw_input = "{\"value\": 42.0}";
-        const mapped = try invokeMapper(wasm_module, allocator, reading_mapper, raw_input);
+        const mapped = try invokeMapper(&wasm_module, allocator, reading_mapper, raw_input);
         defer allocator.free(mapped);
 
         var store_guard = lww_arc.getMut().lock();
@@ -253,7 +246,7 @@ test "E2E: multi-cycle cascade through rule chain" {
     }
 
     var wasm_dispatcher = WasmRuleDispatcher{
-        .module = wasm_module,
+        .module = &wasm_module,
         .reverse = &reverse,
         .context = &context,
     };

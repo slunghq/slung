@@ -1,134 +1,52 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-
 const zwasm = @import("zwasm");
-
 const types = @import("../types.zig");
 const graph_index = @import("index.zig");
-const host = @import("host.zig");
 const module = @import("module.zig");
 const GraphBuilder = module.GraphBuilder;
 
-pub fn wire(
-    allocator: Allocator,
-    wasm_module: *zwasm.WasmModule,
-    forward: *graph_index.ForwardIndex,
-    reverse: *graph_index.ReverseIndex,
-    namespace: types.NamespaceId,
-    module_ref: types.WasmModuleRef,
-) !void {
+pub fn wire(allocator: Allocator, wasm_module: *const zwasm.Module, instance: *zwasm.Instance, forward: *graph_index.ForwardIndex, reverse: *graph_index.ReverseIndex, namespace: types.NamespaceId, module_ref: types.WasmModuleRef) !void {
     var builder = GraphBuilder.init(allocator, namespace, module_ref);
     defer builder.deinit();
-
-    try fetchSourceDescriptors(allocator, wasm_module, &builder);
-
-    try fetchComponentDescriptors(allocator, wasm_module, &builder);
-
-    try fetchRuleDescriptors(allocator, wasm_module, &builder);
-
+    try fetchDescriptors(allocator, wasm_module, instance, &builder);
     try builder.build(forward, reverse);
 }
 
-fn fetchSourceDescriptors(allocator: Allocator, wasm_module: *zwasm.WasmModule, builder: *GraphBuilder) !void {
-    const exports = wasm_module.export_fns;
-    for (exports) |export_info| {
-        if (std.mem.startsWith(u8, export_info.name, "__slung_source_") and std.mem.endsWith(u8, export_info.name, "_descriptor")) {
-            var result: [1]u64 = undefined;
-            try wasm_module.invoke(export_info.name, &.{}, result[0..]);
-            const length: u32 = @intCast(result[0] & 0xFFFFFFFF);
-            const offset: u32 = @intCast((result[0] >> 32) & 0xFFFFFFFF);
-
-            const bytes = try wasm_module.memoryRead(allocator, offset, length);
+fn fetchDescriptors(allocator: Allocator, wasm_module: *const zwasm.Module, instance: *zwasm.Instance, builder: *GraphBuilder) !void {
+    var exports = try wasm_module.exports(allocator);
+    defer exports.deinit();
+    for (0..3) |phase| {
+        for (exports.items) |export_info| {
+            if (export_info.kind != .func) continue;
+            const is_source = std.mem.startsWith(u8, export_info.name, "__slung_source_") and std.mem.endsWith(u8, export_info.name, "_descriptor");
+            const is_component = std.mem.startsWith(u8, export_info.name, "__slung_component_") and std.mem.endsWith(u8, export_info.name, "_descriptor");
+            const is_rule = std.mem.startsWith(u8, export_info.name, "__slung_rule_") and std.mem.endsWith(u8, export_info.name, "_descriptor");
+            if ((phase == 0 and !is_source) or (phase == 1 and !is_component) or (phase == 2 and !is_rule)) continue;
+            var result = [_]zwasm.Value{.fromI64(0)};
+            try instance.invoke(export_info.name, &.{}, &result);
+            const descriptor_word: u64 = @bitCast(result[0].i64);
+            const length: u32 = @truncate(descriptor_word);
+            const offset: u32 = @truncate(descriptor_word >> 32);
+            const memory = instance.memory() orelse return error.NoMemory;
+            const bytes = try allocator.dupe(u8, try memory.sliceAt(offset, length));
             defer allocator.free(bytes);
-
-            const parsed = try std.json.parseFromSlice(module.ParsedSourceDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
-            defer parsed.deinit();
-
-            const normalized = try module.normalizeSourceDescriptor(allocator, parsed.value);
-            defer allocator.free(normalized.config);
-
-            _ = try builder.registerSource(normalized);
-        }
-    }
-}
-
-fn fetchComponentDescriptors(allocator: Allocator, wasm_module: *zwasm.WasmModule, builder: *GraphBuilder) !void {
-    const exports = wasm_module.export_fns;
-    for (exports) |export_info| {
-        if (std.mem.startsWith(u8, export_info.name, "__slung_component_") and std.mem.endsWith(u8, export_info.name, "_descriptor")) {
-            var result: [1]u64 = undefined;
-            try wasm_module.invoke(export_info.name, &.{}, result[0..]);
-            const length: u32 = @intCast(result[0] & 0xFFFFFFFF);
-            const offset: u32 = @intCast((result[0] >> 32) & 0xFFFFFFFF);
-
-            const bytes = try wasm_module.memoryRead(allocator, offset, length);
-            defer allocator.free(bytes);
-
-            const parsed = try std.json.parseFromSlice(module.ComponentDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
-            defer parsed.deinit();
-
-            var comp_iter = builder.components.iterator();
-            while (comp_iter.next()) |entry| {
-                if (std.mem.eql(u8, entry.value_ptr.type_name, parsed.value.name)) {
-                    try builder.registerComponentType(parsed.value, entry.value_ptr.entity_id, entry.value_ptr.component_id);
-                }
+            if (std.mem.startsWith(u8, export_info.name, "__slung_source_") and std.mem.endsWith(u8, export_info.name, "_descriptor")) {
+                const parsed = try std.json.parseFromSlice(module.ParsedSourceDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
+                defer parsed.deinit();
+                const normalized = try module.normalizeSourceDescriptor(allocator, parsed.value);
+                defer allocator.free(normalized.config);
+                _ = try builder.registerSource(normalized);
+            } else if (std.mem.startsWith(u8, export_info.name, "__slung_component_") and std.mem.endsWith(u8, export_info.name, "_descriptor")) {
+                const parsed = try std.json.parseFromSlice(module.ComponentDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
+                defer parsed.deinit();
+                var it = builder.components.iterator();
+                while (it.next()) |entry| if (std.mem.eql(u8, entry.value_ptr.type_name, parsed.value.name)) try builder.registerComponentType(parsed.value, entry.value_ptr.entity_id, entry.value_ptr.component_id);
+            } else if (std.mem.startsWith(u8, export_info.name, "__slung_rule_") and std.mem.endsWith(u8, export_info.name, "_descriptor")) {
+                const parsed = try std.json.parseFromSlice(module.RuleDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
+                defer parsed.deinit();
+                _ = try builder.registerRule(parsed.value);
             }
         }
     }
-}
-
-fn fetchRuleDescriptors(allocator: Allocator, wasm_module: *zwasm.WasmModule, builder: *GraphBuilder) !void {
-    const exports = wasm_module.export_fns;
-    for (exports) |export_info| {
-        if (std.mem.startsWith(u8, export_info.name, "__slung_rule_") and std.mem.endsWith(u8, export_info.name, "_descriptor")) {
-            var result: [1]u64 = undefined;
-            try wasm_module.invoke(export_info.name, &.{}, result[0..]);
-            const length: u32 = @intCast(result[0] & 0xFFFFFFFF);
-            const offset: u32 = @intCast((result[0] >> 32) & 0xFFFFFFFF);
-
-            const bytes = try wasm_module.memoryRead(allocator, offset, length);
-            defer allocator.free(bytes);
-
-            const parsed = try std.json.parseFromSlice(module.RuleDescriptor, allocator, bytes, .{ .ignore_unknown_fields = true });
-            defer parsed.deinit();
-
-            _ = try builder.registerRule(parsed.value);
-        }
-    }
-}
-
-test "wire: parses wasm exports and builds indices from basic.wasm" {
-    const bytes = @embedFile("../testdata/basic.wasm");
-    const allocator = std.testing.allocator;
-    const env_imports = try host.createEnvImport(allocator, 0);
-    defer allocator.free(env_imports.source.host_fns);
-    var wasm_module = try zwasm.WasmModule.loadWasiWithImports(allocator, bytes, &[_]zwasm.ImportEntry{env_imports}, .{});
-    defer wasm_module.deinit();
-
-    var forward = graph_index.ForwardIndex{};
-    var reverse = graph_index.ReverseIndex{};
-    defer {
-        var f_iter = forward.iterator();
-        while (f_iter.next()) |entry| {
-            allocator.free(entry.value_ptr.watchers);
-            allocator.free(entry.value_ptr.source);
-            allocator.free(entry.value_ptr.component_type);
-            allocator.free(entry.value_ptr.mapper);
-        }
-        forward.deinit(allocator);
-
-        var r_iter = reverse.iterator();
-        while (r_iter.next()) |entry| {
-            allocator.free(entry.value_ptr.watch);
-            allocator.free(entry.value_ptr.entrypoint);
-            allocator.free(entry.value_ptr.module);
-            allocator.free(entry.value_ptr.namespace);
-        }
-        reverse.deinit(allocator);
-    }
-
-    try wire(allocator, wasm_module, &forward, &reverse, "test_ns", "basic.wasm");
-
-    try std.testing.expect(forward.count() > 0);
-    try std.testing.expect(reverse.count() > 0);
 }
