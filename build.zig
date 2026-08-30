@@ -88,16 +88,27 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const mod_tests = b.addTest(.{ .root_module = mod, .test_runner = .{
-        .path = b.path("test_runner.zig"),
-        .mode = .simple,
-    } });
+    const emit_test_bin = b.option(bool, "emit-test-bin", "Build test binary without running") orelse false;
+    const test_filter = b.option([]const u8, "test-filter", "Filter for test names");
+
+    const mod_tests = b.addTest(.{
+        .root_module = mod,
+        .test_runner = .{
+            .path = b.path("test_runner.zig"),
+            .mode = .simple,
+        },
+        .filters = if (test_filter) |f| &.{f} else &.{},
+    });
     mod_tests.root_module.addOptions("build_options", mod_opts);
 
-    const run_mod_tests = b.addRunArtifact(mod_tests);
-
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mod_tests.step);
+    if (emit_test_bin) {
+        test_step.dependOn(&b.addInstallArtifact(mod_tests, .{}).step);
+    } else {
+        const run_mod_tests = b.addRunArtifact(mod_tests);
+        run_mod_tests.has_side_effects = true;
+        test_step.dependOn(&run_mod_tests.step);
+    }
 
     const benches_opts = b.addOptions();
     benches_opts.addOption(bool, "enable_connectors", !skip_dusty);
