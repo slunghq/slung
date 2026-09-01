@@ -5,14 +5,17 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const benchmark_optimize: std.builtin.OptimizeMode = .ReleaseFast;
     const skip_dusty = b.option(bool, "skip_dusty", "Skip dusty dependency (for benches)") orelse false;
+    const durability = b.option([]const u8, "durability", "Default WAL durability: eventual or strict") orelse "eventual";
 
     const mod = b.addModule("slung", .{ .root_source_file = b.path("src/slung.zig"), .target = target });
     const mod_opts = b.addOptions();
     mod_opts.addOption(bool, "enable_connectors", !skip_dusty);
+    mod_opts.addOption([]const u8, "default_durability", durability);
     mod.addOptions("build_options", mod_opts);
 
     const exe_opts = b.addOptions();
     exe_opts.addOption(bool, "enable_connectors", true);
+    exe_opts.addOption([]const u8, "default_durability", durability);
 
     const exe = b.addExecutable(.{
         .name = "slung",
@@ -112,6 +115,7 @@ pub fn build(b: *std.Build) void {
 
     const benches_opts = b.addOptions();
     benches_opts.addOption(bool, "enable_connectors", !skip_dusty);
+    benches_opts.addOption([]const u8, "default_durability", durability);
 
     const benches_exe = b.addExecutable(.{
         .name = "benches",

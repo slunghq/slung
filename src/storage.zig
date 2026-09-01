@@ -3,8 +3,15 @@ const sqlite = @import("slung.zig").sqlite;
 const types = @import("types.zig");
 const Timestamp = @import("primitives/hlc.zig").Timestamp;
 const Wal = @import("wal.zig");
+const build_options = @import("build_options");
 
 pub const Storage = @This();
+
+const default_durability: Durability = blk: {
+    if (std.mem.eql(u8, build_options.default_durability, "eventual")) break :blk .eventual;
+    if (std.mem.eql(u8, build_options.default_durability, "strict")) break :blk .strict;
+    @compileError("invalid -Ddurability value; expected eventual or strict");
+};
 
 const sqlite_ok = 0;
 const sqlite_row = 100;
@@ -27,7 +34,7 @@ io: std.Io,
 durability: Durability = .eventual,
 
 pub fn open(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Storage {
-    return openWithDurability(allocator, io, path, .eventual);
+    return openWithDurability(allocator, io, path, default_durability);
 }
 
 pub fn openWithDurability(allocator: std.mem.Allocator, io: std.Io, path: []const u8, durability: Durability) !Storage {

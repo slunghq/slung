@@ -216,7 +216,7 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
         .ptr = &dispatcher,
         .dispatch_fn = WasmRuleDispatcher.dispatch,
     };
-    var loop = InferenceLoop.init(&context, rule_dispatcher, 10, allocator);
+    var loop = InferenceLoop.init(&context, rule_dispatcher, 1, allocator);
     defer loop.deinit();
 
     const input = "{\"value\": 42.0}";
