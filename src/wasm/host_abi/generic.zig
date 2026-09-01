@@ -47,12 +47,22 @@ pub fn slung_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         return;
     };
 
-    var store_guard = ctx.lww_store.getMut().lock();
-    defer store_guard.deinit();
-    const store = store_guard.get();
+    var cached_value: ?types.Value = null;
+    {
+        var store_guard = ctx.lww_store.getMut().lock();
+        defer store_guard.deinit();
+        if (store_guard.get().get(key_str)) |entry| {
+            cached_value = entry.value;
+        }
+    }
 
-    const entry_opt = store.get(key_str);
-    if (entry_opt == null) {
+    const persisted = if (cached_value == null and ctx.storage != null)
+        (try ctx.loadFact(entity_id, component_id))
+    else
+        null;
+    defer if (persisted) |fact| fact.deinit(ctx.allocator);
+
+    if (cached_value == null and persisted == null) {
         try writeGuestU32(ctx.module, out_ptr, 0);
         try writeGuestU32(ctx.module, out_len, 0);
         try vm.pushOperand(@as(u64, 1));
@@ -62,7 +72,7 @@ pub fn slung_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
     var out: std.Io.Writer.Allocating = .init(ctx.allocator);
     defer out.deinit();
 
-    const value = entry_opt.?.value;
+    const value = cached_value orelse types.Value{ .Bytes = persisted.?.value };
     switch (value) {
         .Bool => |b| try std.json.Stringify.value(b, .{}, &out.writer),
         .Int => |i| try std.json.Stringify.value(i, .{}, &out.writer),
@@ -133,7 +143,7 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
 
     // namespace:entity:component
     var key_buf: [512]u8 = undefined;
-    const key_str = std.fmt.bufPrintZ(&key_buf, "{s}:{d}:{d}", .{
+    const key_str = std.fmt.bufPrint(&key_buf, "{s}:{d}:{d}", .{
         ctx.namespace,
         entity_id,
         component_id,
@@ -143,30 +153,56 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         return;
     };
 
-    var store_guard = ctx.lww_store.getMut().lock();
-    defer store_guard.deinit();
-    const store = store_guard.get();
+    const accepted = if (ctx.storage) |_| blk: {
+        // Update in-memory LWW first.
+        const memory_accepted = blk2: {
+            var store_guard = ctx.lww_store.getMut().lock();
+            defer store_guard.deinit();
+            break :blk2 store_guard.get().put(key_str, ts, parsed_value, cause) catch {
+                try vm.pushOperand(@as(u64, 5));
+                return;
+            };
+        };
+        if (memory_accepted) {
+            // Accumulate for cascade checkpoint; no WAL write here.
+            _ = ctx.accumulateMutation(.{
+                .namespace = ctx.namespace,
+                .entity = entity_id,
+                .component = component_id,
+                .value = value_bytes,
+                .timestamp = ts,
+                .cause = cause,
+            }) catch {
+                try vm.pushOperand(@as(u64, 5));
+                return;
+            };
+            // Signal dirty so transitive rules fire.
+            var queue_guard = ctx.dirty_queue.getMut().lock();
+            defer queue_guard.deinit();
+            _ = queue_guard.get().push(.{ .entity = entity_id, .component = component_id }) catch {};
+        }
+        break :blk memory_accepted;
+    } else blk: {
+        var store_guard = ctx.lww_store.getMut().lock();
+        defer store_guard.deinit();
+        const store = store_guard.get();
+        const memory_accepted = store.put(key_str, ts, parsed_value, cause) catch {
+            try vm.pushOperand(@as(u64, 5));
+            return;
+        };
 
-    const accepted = store.put(key_str, ts, parsed_value, cause) catch {
-        try vm.pushOperand(@as(u64, 5));
-        return;
+        if (memory_accepted) {
+            var queue_guard = ctx.dirty_queue.getMut().lock();
+            defer queue_guard.deinit();
+            _ = queue_guard.get().push(.{
+                .entity = entity_id,
+                .component = component_id,
+            }) catch {};
+        }
+        break :blk memory_accepted;
     };
 
-    if (accepted) {
-        var queue_guard = ctx.dirty_queue.getMut().lock();
-        defer queue_guard.deinit();
-        const queue = queue_guard.get();
-
-        const dirty_entry = types.DirtyEntry{
-            .entity = entity_id,
-            .component = component_id,
-        };
-
-        _ = queue.push(dirty_entry) catch {
-            // Queue full, but we already wrote to store
-            // This is a degradation but acceptable for now
-        };
-    }
+    _ = accepted;
 
     try vm.pushOperand(@as(u64, 0));
 }

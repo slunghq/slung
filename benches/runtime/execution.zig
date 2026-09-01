@@ -12,6 +12,7 @@ const loop_mod = @import("../../src/engine/loop.zig");
 const InferenceLoop = loop_mod.InferenceLoop;
 const RuleDispatcher = loop_mod.RuleDispatcher;
 const LwwRegistry = @import("../../src/memory/lww.zig").LwwRegistry;
+const Storage = @import("../../src/storage.zig").Storage;
 const Arc = @import("../../src/primitives/arc.zig").Arc;
 const Hlc = @import("../../src/primitives/hlc.zig").Hlc;
 const Mutex = @import("../../src/primitives/mutex.zig").Mutex;
@@ -22,6 +23,10 @@ const graph_index = @import("../../src/wasm/index.zig");
 const wasm_wire = @import("../../src/wasm/wire.zig");
 
 const n_iters: usize = 100_000;
+
+fn elapsedNs(io: std.Io, start: std.Io.Timestamp) u64 {
+    return @intCast(start.untilNow(io, .awake).toNanoseconds());
+}
 
 fn deinitIndices(
     allocator: Allocator,
@@ -152,7 +157,10 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
         claim_arc.release();
     }
 
-    var clock = Hlc.init(1, io);
+    var storage = try Storage.open(allocator, io, "runtime-benchmark.db");
+    defer storage.deinit();
+
+    var clock = Hlc.init(io, 1);
     var wasm_module: *zwasm.WasmModule = undefined;
     var context = Context.init(
         allocator,
@@ -166,7 +174,9 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
         wasm_module,
         "bench_ns",
         "node-1",
+        &storage,
     );
+    defer context.deinit();
 
     const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&context));
     defer allocator.free(env_imports.source.host_fns);
@@ -207,13 +217,21 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
         .dispatch_fn = WasmRuleDispatcher.dispatch,
     };
     var loop = InferenceLoop.init(&context, rule_dispatcher, 10, allocator);
+    defer loop.deinit();
 
     const input = "{\"value\": 42.0}";
     const start = std.Io.Clock.awake.now(io);
     var total_fired: usize = 0;
+    var mapping_ns: u64 = 0;
+    var source_checkpoint_ns: u64 = 0;
+    var lww_ns: u64 = 0;
+    var execution_ns: u64 = 0;
+    var cascade_checkpoint_ns: u64 = 0;
 
     for (0..n_iters) |_| {
+        var phase_start = std.Io.Clock.awake.now(io);
         const mapped = try invokeMapper(wasm_module, allocator, reading_mapper, input);
+        mapping_ns += elapsedNs(io, phase_start);
         defer allocator.free(mapped);
 
         var key_buf: [128]u8 = undefined;
@@ -222,34 +240,61 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
             "{s}:{d}:{d}",
             .{ "bench_ns", reading_key.entity, reading_key.component },
         );
+        const ts = clock.send();
+        const cause = Storage.FactMutation{
+            .namespace = "bench_ns",
+            .entity = reading_key.entity,
+            .component = reading_key.component,
+            .value = mapped,
+            .timestamp = ts,
+            .cause = .{ .cause = reading_key.component, .entity = reading_key.entity, .node = "node-1" },
+        };
 
+        // Source checkpoint: this is the durability boundary for the input.
+        phase_start = std.Io.Clock.awake.now(io);
+        _ = try context.persistMutation(cause);
+        source_checkpoint_ns += elapsedNs(io, phase_start);
+
+        // Update LWW cache so rules can read this fact immediately.
+        phase_start = std.Io.Clock.awake.now(io);
         {
             var store_guard = lww_arc.getMut().lock();
             defer store_guard.deinit();
-
-            _ = try store_guard.get().put(
-                store_key,
-                clock.send(),
-                .{ .Bytes = mapped },
-                .{ .cause = reading_key.component, .entity = reading_key.entity, .node = "node-1" },
-            );
+            _ = try store_guard.get().put(store_key, ts, .{ .Bytes = mapped }, cause.cause);
         }
+        lww_ns += elapsedNs(io, phase_start);
 
-        {
-            var queue_guard = dirty_queue_arc.getMut().lock();
-            defer queue_guard.deinit();
-            try queue_guard.get().push(.{ .entity = reading_key.entity, .component = reading_key.component });
-        }
-
-        total_fired += try loop.run();
+        // Rule execution and the final cascade checkpoint are timed separately.
+        const timing = try loop.runTimed();
+        total_fired += timing.fired;
+        execution_ns += timing.execution_ns;
+        cascade_checkpoint_ns += timing.checkpoint_ns;
     }
 
-    const elapsed_ns: u64 = @intCast(start.untilNow(io, .awake).toNanoseconds());
+    const elapsed_ns = elapsedNs(io, start);
     const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
     const ops_per_s = if (elapsed_s > 0) @as(u64, @intFromFloat(@as(f64, n_iters) / elapsed_s)) else 0;
+    const per_update = struct {
+        fn value(ns: u64) f64 {
+            return @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(n_iters)) / 1e6;
+        }
+    }.value;
 
-    std.debug.print(
-        "  {d} updates in {d:.2}s - {d} updates/s - {d} rules fired\n",
-        .{ n_iters, elapsed_s, ops_per_s, total_fired },
-    );
+    std.debug.print("  {d} updates in {d:.2}s - {d} updates/s - {d} rules fired\n", .{
+        n_iters, elapsed_s, ops_per_s, total_fired,
+    });
+    std.debug.print("  phase avg (ms/update): map {d:.3}, source checkpoint {d:.3}, LWW {d:.3}, execution {d:.3}, cascade checkpoint {d:.3}\n", .{
+        per_update(mapping_ns),
+        per_update(source_checkpoint_ns),
+        per_update(lww_ns),
+        per_update(execution_ns),
+        per_update(cascade_checkpoint_ns),
+    });
+    std.debug.print("  phase total (ms): map {d:.1}, source checkpoint {d:.1}, LWW {d:.1}, execution {d:.1}, cascade checkpoint {d:.1}\n", .{
+        per_update(mapping_ns) * @as(f64, @floatFromInt(n_iters)),
+        per_update(source_checkpoint_ns) * @as(f64, @floatFromInt(n_iters)),
+        per_update(lww_ns) * @as(f64, @floatFromInt(n_iters)),
+        per_update(execution_ns) * @as(f64, @floatFromInt(n_iters)),
+        per_update(cascade_checkpoint_ns) * @as(f64, @floatFromInt(n_iters)),
+    });
 }

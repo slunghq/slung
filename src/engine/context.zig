@@ -15,6 +15,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
+const zio = @import("zio");
 const zwasm = @import("zwasm");
 
 const LwwRegistry = @import("../memory/lww.zig").LwwRegistry;
@@ -24,6 +25,7 @@ const Mutex = @import("../primitives/mutex.zig").Mutex;
 const DirtyQueue = @import("../queue.zig").DirtyQueue;
 const types = @import("../types.zig");
 const graph_index = @import("../wasm/index.zig");
+const Storage = @import("../storage.zig").Storage;
 
 /// Claim register: tracks (RuleId, EntityId) pairs currently executing.
 /// Prevents duplicate rule execution within the same inference cycle.
@@ -90,6 +92,7 @@ pub const Context = struct {
     lww_store: Arc(Mutex(LwwRegistry)),
     dirty_queue: Arc(Mutex(DirtyQueue)),
     claim_register: Arc(Mutex(ClaimRegister)),
+    storage: ?*Storage,
 
     // Indices (precomputed, read-only)
     forward_index: *graph_index.ForwardIndex,
@@ -113,6 +116,10 @@ pub const Context = struct {
     allocator: Allocator,
     io: std.Io,
 
+    // Cascade accumulator: rule-produced mutations collected during propagation.
+    // Flushed to WAL as one checkpoint after cascade convergence.
+    cascade_outputs: std.ArrayListUnmanaged(Storage.FactMutation) = .empty,
+
     /// Initialize context with shared resources.
     pub fn init(
         allocator: Allocator,
@@ -126,12 +133,14 @@ pub const Context = struct {
         module: *zwasm.WasmModule,
         namespace: types.NamespaceId,
         node_id: types.NodeId,
+        storage: ?*Storage,
     ) Self {
         return .{
             .io = io,
             .lww_store = lww_store,
             .dirty_queue = dirty_queue,
             .claim_register = claim_register,
+            .storage = storage,
             .forward_index = forward_index,
             .reverse_index = reverse_index,
             .clock = clock,
@@ -142,6 +151,111 @@ pub const Context = struct {
             .node_id = node_id,
             .allocator = allocator,
         };
+    }
+
+    /// Source ingestion checkpoint: persists the input fact durably before execution.
+    pub fn persistMutation(self: *Self, mutation: Storage.FactMutation) !bool {
+        var accepted = [_]bool{false};
+        try self.persistMutations(&.{mutation}, accepted[0..]);
+        return accepted[0];
+    }
+
+    pub fn persistMutations(
+        self: *Self,
+        mutations: []const Storage.FactMutation,
+        accepted: []bool,
+    ) !void {
+        const storage = self.storage orelse return error.StorageUnavailable;
+        if (storage.durability == .eventual) {
+            return storage.applyMutations(mutations, accepted);
+        }
+        var task = try zio.spawnBlocking(persistMutationsBlocking, .{ storage, mutations, accepted });
+        try task.join();
+    }
+
+    fn persistMutationsBlocking(
+        storage: *Storage,
+        mutations: []const Storage.FactMutation,
+        accepted: []bool,
+    ) !void {
+        try storage.applyMutations(mutations, accepted);
+    }
+
+    /// Records a rule-produced mutation into the cascade accumulator.
+    /// Updates the LWW store immediately; WAL write is deferred to flushCascade.
+    pub fn accumulateMutation(self: *Self, mutation: Storage.FactMutation) !bool {
+        // Copy slices because the caller's buffers are transient.
+        const owned = Storage.FactMutation{
+            .namespace = try self.allocator.dupe(u8, mutation.namespace),
+            .entity = mutation.entity,
+            .component = mutation.component,
+            .value = try self.allocator.dupe(u8, mutation.value),
+            .timestamp = mutation.timestamp,
+            .cause = .{
+                .cause = mutation.cause.cause,
+                .entity = mutation.cause.entity,
+                .node = try self.allocator.dupe(u8, mutation.cause.node),
+            },
+        };
+        try self.cascade_outputs.append(self.allocator, owned);
+        return true;
+    }
+
+    /// Writes accumulated cascade outputs + dirty ack as one WAL checkpoint.
+    /// Called by the inference loop after a cascade converges.
+    pub fn flushCascade(self: *Self, ack_id: i64) !void {
+        defer {
+            for (self.cascade_outputs.items) |m| {
+                self.allocator.free(m.namespace);
+                self.allocator.free(m.value);
+                self.allocator.free(m.cause.node);
+            }
+            self.cascade_outputs.clearRetainingCapacity();
+        }
+        const storage = self.storage orelse return;
+        try storage.flushCascade(self.cascade_outputs.items, ack_id);
+    }
+
+    /// Clears the cascade accumulator without writing (used on error paths).
+    pub fn discardCascade(self: *Self) void {
+        for (self.cascade_outputs.items) |m| {
+            self.allocator.free(m.namespace);
+            self.allocator.free(m.value);
+            self.allocator.free(m.cause.node);
+        }
+        self.cascade_outputs.clearRetainingCapacity();
+    }
+
+    /// Frees cascade accumulator memory. Call during context teardown.
+    pub fn deinit(self: *Self) void {
+        self.discardCascade();
+        self.cascade_outputs.deinit(self.allocator);
+    }
+
+    /// Direct in-memory fact read. No WAL I/O on the hot path.
+    pub fn loadFact(
+        self: *Self,
+        entity: types.EntityId,
+        component: types.ComponentId,
+    ) !?Storage.Fact {
+        const storage = self.storage orelse return null;
+        return storage.getFact(self.namespace, entity, component);
+    }
+
+    /// Direct in-memory pending read. No WAL I/O on the hot path.
+    pub fn nextPendingDirty(self: *Self) !?Storage.PendingDirty {
+        const storage = self.storage orelse return null;
+        return storage.nextPendingDirtyFor(self.namespace);
+    }
+
+    pub fn acknowledgeDirty(self: *Self, id: i64) !void {
+        const storage = self.storage orelse return;
+        try storage.acknowledgeDirty(id);
+    }
+
+    pub fn acknowledgeDirtyBatch(self: *Self, ids: []const i64) !void {
+        const storage = self.storage orelse return;
+        try storage.acknowledgeDirtyBatch(ids);
     }
 
     /// Update current execution context (entity and rule).

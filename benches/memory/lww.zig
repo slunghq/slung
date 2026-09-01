@@ -21,7 +21,7 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
     var reg = LwwRegistry.init(allocator);
     defer reg.deinit();
 
-    var clock = Hlc.init(1, io);
+    var clock = Hlc.init(io, 1);
 
     var key_bufs: [n_keys][24]u8 = undefined;
     var key_slices: [n_keys][]const u8 = undefined;

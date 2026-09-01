@@ -56,11 +56,20 @@ pub const Hlc = struct {
     logical: u32,
     io: std.Io,
 
-    pub fn init(node_id: u32, io: std.Io) Self {
+    pub fn init(io: std.Io, node_id: u32) Self {
         return .{
             .node_id = node_id,
             .wall = 0,
             .logical = 0,
+            .io = io,
+        };
+    }
+
+    pub fn fromTimestamp(io: std.Io, timestamp: Timestamp) Self {
+        return .{
+            .node_id = timestamp.node_id,
+            .wall = timestamp.wall,
+            .logical = timestamp.logical,
             .io = io,
         };
     }
@@ -114,7 +123,7 @@ pub const Hlc = struct {
 };
 
 test "Hlc: send is monotonic (lazy wall)" {
-    var clk = Hlc.init(1, std.testing.io);
+    var clk = Hlc.init(std.testing.io, 1);
     const t1 = clk.send();
     const t2 = clk.send();
     const t3 = clk.send();
@@ -124,8 +133,8 @@ test "Hlc: send is monotonic (lazy wall)" {
 
 test "Hlc: recv advances past remote" {
     const io = std.testing.io;
-    var node_a = Hlc.init(1, io);
-    var node_b = Hlc.init(2, io);
+    var node_a = Hlc.init(io, 1);
+    var node_b = Hlc.init(io, 2);
 
     const sent = node_a.send();
     const received = node_b.recv(sent);
@@ -155,8 +164,9 @@ test "Hlc: wall time dominates" {
 }
 
 test "Hlc: recv handles node_b ahead of node_a" {
-    var node_a = Hlc.init(1, std.testing.io);
-    var node_b = Hlc.init(2, std.testing.io);
+    const io = std.testing.io;
+    var node_a = Hlc.init(io, 1);
+    var node_b = Hlc.init(io, 2);
 
     node_b.wall = 9_999_999_999;
     node_b.logical = 0;
@@ -168,7 +178,7 @@ test "Hlc: recv handles node_b ahead of node_a" {
 }
 
 test "Hlc: now does not advance clock" {
-    var clk = Hlc.init(42, std.testing.io);
+    var clk = Hlc.init(std.testing.io, 42);
     clk.wall = 1000;
     clk.logical = 5;
 
@@ -182,7 +192,7 @@ test "Hlc: now does not advance clock" {
 }
 
 test "Hlc: send_with_wall allows batched wall updates" {
-    var clk = Hlc.init(1, std.testing.io);
+    var clk = Hlc.init(std.testing.io, 1);
     const wall = 5000;
     const t1 = clk.send_with_wall(wall);
     const t2 = clk.send_with_wall(wall);

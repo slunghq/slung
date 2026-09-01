@@ -10,6 +10,7 @@ const Hlc = @import("../primitives/hlc.zig").Hlc;
 const Mutex = @import("../primitives/mutex.zig").Mutex;
 const queue_mod = @import("../queue.zig");
 const types = @import("../types.zig");
+const Storage = @import("../storage.zig").Storage;
 const wasm_host = @import("../wasm/host.zig");
 const graph_index = @import("../wasm/index.zig");
 const wasm_module_desc = @import("../wasm/module.zig");
@@ -35,6 +36,8 @@ pub const ModuleConfig = struct {
     node_id: []const u8,
     server: *ws_mod.Server,
     http_server: *http_mod.Server,
+    storage: *Storage,
+    durability: Storage.Durability = .eventual,
 };
 
 pub const ModuleSession = struct {
@@ -59,6 +62,7 @@ pub const ModuleSession = struct {
     http_connection: ?http_mod.HTTPServerConnection,
     http_sources: std.ArrayList(HttpRouteSource),
     http_server: *http_mod.Server,
+    storage: *Storage,
 
     context: Context,
     clock: Hlc,
@@ -131,7 +135,8 @@ pub const ModuleSession = struct {
             session.claim_register.release();
         }
 
-        session.clock = Hlc.init(1, config.io);
+        const persisted_timestamp = try config.storage.latestTimestamp(config.namespace);
+        session.clock = if (persisted_timestamp) |ts| Hlc.fromTimestamp(config.io, ts) else Hlc.init(config.io, 1);
 
         session.context = Context.init(
             allocator,
@@ -145,6 +150,7 @@ pub const ModuleSession = struct {
             undefined, // module filled after load
             config.namespace,
             config.node_id,
+            config.storage,
         );
 
         const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&session.context));
@@ -194,6 +200,7 @@ pub const ModuleSession = struct {
         session.ws_sources = .empty;
         session.http_sources = .empty;
         session.http_server = config.http_server;
+        session.storage = config.storage;
 
         return session;
     }
@@ -288,11 +295,7 @@ pub const ModuleSession = struct {
             const did_work = try self.pollSources();
 
             if (!did_work) {
-                var queue_guard = self.dirty_queue.getMut().lock();
-                defer queue_guard.deinit();
-                if (queue_guard.get().is_empty()) {
-                    break;
-                }
+                if (try self.storage.pendingDirtyCountFor(self.namespace) == 0) break;
             }
 
             _ = try self.runInferenceOnce();
@@ -313,10 +316,7 @@ pub const ModuleSession = struct {
         // First, poll for new data from sources (WebSocket, TCP, etc.)
         _ = try self.pollSources();
 
-        var queue_guard = self.dirty_queue.getMut().lock();
-        const empty = queue_guard.get().is_empty();
-        queue_guard.deinit();
-        if (empty) return false;
+        if (try self.storage.pendingDirtyCountFor(self.namespace) == 0) return false;
 
         _ = try self.runInferenceOnce();
         return true;
@@ -568,30 +568,30 @@ pub const ModuleSession = struct {
                 continue;
             };
 
-            {
+            const timestamp = self.clock.send();
+            const cause = types.CausalTag{
+                .cause = forward_key.component,
+                .entity = forward_key.entity,
+                .node = self.node_id,
+            };
+            const accepted = self.context.persistMutation(.{
+                .namespace = self.namespace,
+                .entity = forward_key.entity,
+                .component = forward_key.component,
+                .value = mapped,
+                .timestamp = timestamp,
+                .cause = cause,
+            }) catch |err| {
+                std.log.err("Failed to persist fact mutation: {}", .{err});
+                continue;
+            };
+
+            if (accepted) {
                 var store_guard = self.lww_store.getMut().lock();
                 defer store_guard.deinit();
-
-                _ = store_guard.get().put(
-                    store_key,
-                    self.clock.send(),
-                    .{ .Bytes = mapped },
-                    .{ .cause = forward_key.component, .entity = forward_key.entity, .node = self.node_id },
-                ) catch |err| {
-                    std.log.err("Failed to write to LWW store: {}", .{err});
+                _ = store_guard.get().put(store_key, timestamp, .{ .Bytes = mapped }, cause) catch |err| {
+                    std.log.err("Failed to update LWW cache: {}", .{err});
                     continue;
-                };
-            }
-
-            {
-                var queue_guard = self.dirty_queue.getMut().lock();
-                defer queue_guard.deinit();
-
-                _ = queue_guard.get().push(.{
-                    .entity = forward_key.entity,
-                    .component = forward_key.component,
-                }) catch |err| {
-                    std.log.err("Failed to push dirty entry: {}", .{err});
                 };
             }
         }

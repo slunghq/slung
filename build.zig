@@ -126,6 +126,11 @@ pub fn build(b: *std.Build) void {
     benches_exe.root_module.addImport("codspeed", codspeed.module("codspeed"));
     benches_exe.root_module.addImport("zio", zio.module("zio"));
     benches_exe.root_module.addImport("zwasm", zwasm.module("zwasm"));
+    benches_exe.root_module.addIncludePath(b.path("lib/sqlite"));
+    benches_exe.root_module.addCSourceFile(.{
+        .file = b.path("lib/sqlite/sqlite3.c"),
+        .flags = sqlite_flags,
+    });
     if (!skip_dusty) {
         benches_exe.root_module.addImport("dusty", dusty.module("dusty"));
         dusty.module("dusty").addImport("zio", zio.module("zio"));
