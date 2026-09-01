@@ -165,14 +165,15 @@ pub fn enqueueBatch(self: *Self, mutations: []const FactMutation, accepted: []bo
         });
     }
 
-    self.mutex.lockUncancelable(self.io);
-    if (self.failed) {
+    while (true) {
+        self.mutex.lockUncancelable(self.io);
+        if (self.failed) {
+            self.mutex.unlock(self.io);
+            return error.WalUnavailable;
+        }
+        if (self.requests.items.len < MaxQueuedRequests) break;
         self.mutex.unlock(self.io);
-        return error.WalUnavailable;
-    }
-    if (self.requests.items.len >= MaxQueuedRequests) {
-        self.mutex.unlock(self.io);
-        return error.WalBackpressure;
+        self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
     }
     for (request.mutations.items, 0..) |mutation, i| {
         request.accepted[i] = self.applyMutation(mutation) catch |err| {
@@ -416,14 +417,15 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
         });
     }
 
-    self.mutex.lockUncancelable(self.io);
-    if (self.failed) {
+    while (true) {
+        self.mutex.lockUncancelable(self.io);
+        if (self.failed) {
+            self.mutex.unlock(self.io);
+            return error.WalUnavailable;
+        }
+        if (self.requests.items.len < MaxQueuedRequests) break;
         self.mutex.unlock(self.io);
-        return error.WalUnavailable;
-    }
-    if (self.requests.items.len >= MaxQueuedRequests) {
-        self.mutex.unlock(self.io);
-        return error.WalBackpressure;
+        self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
     }
     for (mutations) |mutation| self.applyMutationNoDirty(mutation) catch |err| {
         self.mutex.unlock(self.io);
