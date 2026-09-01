@@ -63,6 +63,10 @@ const RecordAck: u8 = 2;
 const RecordCascade: u8 = 3;
 const HeaderSize = @sizeOf(u32);
 const TrailerSize = @sizeOf(u32);
+const MaxRecordSize: u32 = 16 * 1024 * 1024;
+const MaxFieldSize: u32 = 8 * 1024 * 1024;
+const MaxMutationCount: u32 = 1 * 1024 * 1024;
+const MaxQueuedRequests: usize = 4096;
 
 allocator: std.mem.Allocator,
 io: std.Io,
@@ -78,6 +82,7 @@ write_mutex: std.Io.Mutex = .init,
 requests: std.ArrayList(*Request) = .empty,
 worker: ?std.Thread = null,
 stopping: bool = false,
+failed: bool = false,
 
 pub fn init(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Self {
     return open(allocator, io, path);
@@ -161,6 +166,14 @@ pub fn enqueueBatch(self: *Self, mutations: []const FactMutation, accepted: []bo
     }
 
     self.mutex.lockUncancelable(self.io);
+    if (self.failed) {
+        self.mutex.unlock(self.io);
+        return error.WalUnavailable;
+    }
+    if (self.requests.items.len >= MaxQueuedRequests) {
+        self.mutex.unlock(self.io);
+        return error.WalBackpressure;
+    }
     for (request.mutations.items, 0..) |mutation, i| {
         request.accepted[i] = self.applyMutation(mutation) catch |err| {
             self.mutex.unlock(self.io);
@@ -202,30 +215,59 @@ fn workerMain(self: *Self) void {
             self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
             continue;
         }
-        const request = self.requests.orderedRemove(0);
+        // Take a snapshot of all currently queued requests. They become one
+        // commit group: records are appended in order, followed by one fsync.
+        var batch = self.requests;
+        self.requests = .empty;
         self.mutex.unlock(self.io);
 
         var failure: ?anyerror = null;
         var attempt: usize = 0;
         while (attempt < 3) : (attempt += 1) {
-            const result = if (request.record_kind == RecordCascade)
-                self.writeCascade(request.mutations.items, request.ack_id)
-            else
-                self.writeBatch(request.mutations.items);
-            if (result) |_| {
-                failure = null;
-                break;
-            } else |err| {
-                failure = err;
-                self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
+            failure = null;
+            for (batch.items) |request| {
+                const result = if (request.record_kind == RecordCascade)
+                    self.writeCascade(request.mutations.items, request.ack_id)
+                else
+                    self.writeBatch(request.mutations.items);
+                if (result) |_| {} else |err| {
+                    failure = err;
+                    break;
+                }
             }
+            if (failure == null) {
+                self.write_mutex.lockUncancelable(self.io);
+                const sync_result = self.file.sync(self.io);
+                self.write_mutex.unlock(self.io);
+                if (sync_result) |_| {} else |err| failure = err;
+            }
+            if (failure == null) break;
+            self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
         }
+
         self.mutex.lockUncancelable(self.io);
-        request.err = failure;
-        request.done = true;
+        for (batch.items) |request| {
+            request.err = failure;
+            request.done = true;
+        }
+        if (failure) |err| {
+            self.failed = true;
+            // Wake strict callers and reject queued work instead of leaving
+            // requests waiting forever after a terminal writer failure.
+            for (self.requests.items) |queued| {
+                queued.err = error.WalUnavailable;
+                queued.done = true;
+                if (!queued.caller_waits) queued.deinit();
+            }
+            self.requests.clearRetainingCapacity();
+            std.log.err("WAL commit failed after retries: {}", .{err});
+        }
         self.mutex.unlock(self.io);
-        if (failure) |err| std.log.err("WAL write failed after retries: {}", .{err});
-        if (!request.caller_waits) request.deinit();
+
+        for (batch.items) |request| {
+            if (!request.caller_waits) request.deinit();
+        }
+        batch.deinit(self.allocator);
     }
 }
 
@@ -234,7 +276,7 @@ fn writeBatch(self: *Self, mutations: []const FactMutation) !void {
     defer payload.deinit(self.allocator);
     try putU32(&payload, self.allocator, @intCast(mutations.len));
     for (mutations) |mutation| try encodeMutation(&payload, self.allocator, mutation);
-    try self.writeRecord(RecordBatch, payload.items);
+    try self.writeRecord(RecordBatch, payload.items, false);
 }
 
 fn writeCascade(self: *Self, mutations: []const FactMutation, ack_id: i64) !void {
@@ -243,7 +285,7 @@ fn writeCascade(self: *Self, mutations: []const FactMutation, ack_id: i64) !void
     try putU64(&payload, self.allocator, @bitCast(ack_id));
     try putU32(&payload, self.allocator, @intCast(mutations.len));
     for (mutations) |mutation| try encodeMutation(&payload, self.allocator, mutation);
-    try self.writeRecord(RecordCascade, payload.items);
+    try self.writeRecord(RecordCascade, payload.items, false);
 }
 
 pub fn recover(self: *Self) !void {
@@ -253,18 +295,29 @@ pub fn recover(self: *Self) !void {
     defer self.allocator.free(bytes);
     const got = try self.file.readPositionalAll(self.io, bytes, 0);
     var pos: usize = 0;
-    while (pos + HeaderSize <= got) {
+    while (pos < got) {
+        // A short header or body is a torn final write. Discard only that
+        // incomplete tail; a complete malformed record is a hard failure.
+        if (got - pos < HeaderSize) {
+            try self.file.setLength(self.io, @intCast(pos));
+            return;
+        }
         const length = std.mem.readInt(u32, bytes[pos..][0..4], .little);
+        if (length < 1 or length > MaxRecordSize) return error.CorruptWal;
+        const remaining = got - pos;
+        if (@as(usize, length) > remaining -| HeaderSize -| TrailerSize) {
+            try self.file.setLength(self.io, @intCast(pos));
+            return;
+        }
         const end = pos + HeaderSize + @as(usize, length) + TrailerSize;
-        if (length < 1 or end > got) break;
         const body = bytes[pos + HeaderSize ..][0..length];
         const stored = std.mem.readInt(u32, bytes[pos + HeaderSize + length ..][0..4], .little);
-        if (checksum(body) != stored) break;
+        if (checksum(body) != stored) return error.CorruptWal;
         switch (body[0]) {
-            RecordBatch => self.replayBatch(body[1..]) catch break,
-            RecordAck => self.replayAck(body[1..]) catch break,
-            RecordCascade => self.replayCascade(body[1..]) catch break,
-            else => break,
+            RecordBatch => try self.replayBatch(body[1..]),
+            RecordAck => try self.replayAck(body[1..]),
+            RecordCascade => try self.replayCascade(body[1..]),
+            else => return error.CorruptWal,
         }
         pos = end;
     }
@@ -322,7 +375,7 @@ pub fn ack(self: *Self, id: i64) !void {
     defer self.mutex.unlock(self.io);
     var payload: [8]u8 = undefined;
     std.mem.writeInt(i64, &payload, id, .little);
-    try self.writeRecord(RecordAck, &payload);
+    try self.writeRecord(RecordAck, &payload, true);
     for (self.pending.items, 0..) |item, i| {
         if (item.id == id) {
             item.deinit(self.allocator);
@@ -364,6 +417,14 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
     }
 
     self.mutex.lockUncancelable(self.io);
+    if (self.failed) {
+        self.mutex.unlock(self.io);
+        return error.WalUnavailable;
+    }
+    if (self.requests.items.len >= MaxQueuedRequests) {
+        self.mutex.unlock(self.io);
+        return error.WalBackpressure;
+    }
     for (mutations) |mutation| self.applyMutationNoDirty(mutation) catch |err| {
         self.mutex.unlock(self.io);
         return err;
@@ -423,7 +484,8 @@ fn applyMutation(self: *Self, mutation: FactMutation) !bool {
     return true;
 }
 
-fn writeRecord(self: *Self, kind: u8, payload: []const u8) !void {
+fn writeRecord(self: *Self, kind: u8, payload: []const u8, sync: bool) !void {
+    if (payload.len > MaxRecordSize - 1) return error.WalRecordTooLarge;
     self.write_mutex.lockUncancelable(self.io);
     defer self.write_mutex.unlock(self.io);
     const length: u32 = @intCast(payload.len + 1);
@@ -436,13 +498,14 @@ fn writeRecord(self: *Self, kind: u8, payload: []const u8) !void {
     std.mem.writeInt(u32, bytes[5 + payload.len ..][0..4], checksum(bytes[4 .. 5 + payload.len]), .little);
     const offset = (try self.file.stat(self.io)).size;
     try self.file.writePositionalAll(self.io, bytes, offset);
-    try self.file.sync(self.io);
+    if (sync) try self.file.sync(self.io);
 }
 
 fn replayBatch(self: *Self, bytes: []const u8) !void {
     if (bytes.len < 4) return error.CorruptWal;
     var pos: usize = 4;
     const count = std.mem.readInt(u32, bytes[0..4], .little);
+    if (count > MaxMutationCount) return error.CorruptWal;
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const decoded = try decodeMutation(bytes, &pos, self.allocator);
@@ -469,6 +532,7 @@ fn replayCascade(self: *Self, bytes: []const u8) !void {
     var pos: usize = 0;
     const ack_id: i64 = @bitCast(try getU64(bytes, &pos));
     const count = try getU32(bytes, &pos);
+    if (count > MaxMutationCount) return error.CorruptWal;
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const decoded = try decodeMutation(bytes, &pos, self.allocator);
@@ -477,6 +541,7 @@ fn replayCascade(self: *Self, bytes: []const u8) !void {
         defer self.allocator.free(decoded.cause.node);
         try self.applyMutationNoDirty(decoded);
     }
+    if (pos != bytes.len) return error.CorruptWal;
     for (self.pending.items, 0..) |item, idx| if (item.id == ack_id) {
         item.deinit(self.allocator);
         _ = self.pending.orderedRemove(idx);
@@ -541,7 +606,7 @@ fn getU64(bytes: []const u8, pos: *usize) !u64 {
 }
 fn getBytes(bytes: []const u8, pos: *usize, allocator: std.mem.Allocator) ![]u8 {
     const n = try getU32(bytes, pos);
-    if (n > bytes.len - pos.*) return error.CorruptWal;
+    if (n > MaxFieldSize or n > bytes.len - pos.*) return error.CorruptWal;
     const result = try allocator.dupe(u8, bytes[pos.*..][0..n]);
     pos.* += n;
     return result;

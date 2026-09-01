@@ -198,6 +198,7 @@ pub const InferenceLoop = struct {
             self.context.flushCascade(id) catch |err| {
                 std.log.err("cascade flush failed: {}", .{err});
                 self.context.discardCascade();
+                return err;
             };
         } else {
             self.context.discardCascade();
