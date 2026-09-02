@@ -18,6 +18,7 @@ pub const Fact = struct {
 
     pub fn deinit(self: Fact, allocator: std.mem.Allocator) void {
         allocator.free(self.value);
+        allocator.free(self.cause.node);
     }
 };
 
@@ -121,6 +122,7 @@ pub fn deinit(self: *Self) void {
     while (it.next()) |entry| {
         self.allocator.free(entry.key_ptr.*);
         self.allocator.free(entry.value_ptr.value);
+        self.allocator.free(entry.value_ptr.cause.node);
     }
     self.facts.deinit(self.allocator);
     for (self.pending.items) |item| item.deinit(self.allocator);
@@ -330,7 +332,18 @@ pub fn getFact(self: *Self, namespace: []const u8, entity: types.EntityId, compo
     const key = try makeKey(self.allocator, namespace, entity, component);
     defer self.allocator.free(key);
     const found = self.facts.get(key) orelse return null;
-    return .{ .value = try self.allocator.dupe(u8, found.value), .timestamp = found.timestamp, .cause = found.cause };
+    const value = try self.allocator.dupe(u8, found.value);
+    errdefer self.allocator.free(value);
+    const cause_node = try self.allocator.dupe(u8, found.cause.node);
+    return .{
+        .value = value,
+        .timestamp = found.timestamp,
+        .cause = .{
+            .cause = found.cause.cause,
+            .entity = found.cause.entity,
+            .node = cause_node,
+        },
+    };
 }
 
 pub fn latestTimestamp(self: *Self, namespace: []const u8) !?Timestamp {
@@ -461,25 +474,51 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
 /// Used to materialise cascade output facts that have already been applied to the LWW store.
 fn applyMutationNoDirty(self: *Self, mutation: FactMutation) !void {
     const key = try makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component);
+    const value = try self.allocator.dupe(u8, mutation.value);
+    errdefer self.allocator.free(value);
+    const cause_node = try self.allocator.dupe(u8, mutation.cause.node);
+    errdefer self.allocator.free(cause_node);
+    const cause: types.CausalTag = .{ .cause = mutation.cause.cause, .entity = mutation.cause.entity, .node = cause_node };
     if (self.facts.getPtr(key)) |current| {
         self.allocator.free(key);
-        if (mutation.timestamp.compare(current.timestamp) != .gt) return;
+        if (mutation.timestamp.compare(current.timestamp) != .gt) {
+            self.allocator.free(value);
+            self.allocator.free(cause_node);
+            return;
+        }
         self.allocator.free(current.value);
-        current.* = .{ .value = try self.allocator.dupe(u8, mutation.value), .timestamp = mutation.timestamp, .cause = mutation.cause };
+        self.allocator.free(current.cause.node);
+        current.* = .{ .value = value, .timestamp = mutation.timestamp, .cause = cause };
     } else {
-        try self.facts.put(self.allocator, key, .{ .value = try self.allocator.dupe(u8, mutation.value), .timestamp = mutation.timestamp, .cause = mutation.cause });
+        self.facts.put(self.allocator, key, .{ .value = value, .timestamp = mutation.timestamp, .cause = cause }) catch |err| {
+            self.allocator.free(key);
+            return err;
+        };
     }
 }
 
 fn applyMutation(self: *Self, mutation: FactMutation) !bool {
     const key = try makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component);
+    const value = try self.allocator.dupe(u8, mutation.value);
+    errdefer self.allocator.free(value);
+    const cause_node = try self.allocator.dupe(u8, mutation.cause.node);
+    errdefer self.allocator.free(cause_node);
+    const cause: types.CausalTag = .{ .cause = mutation.cause.cause, .entity = mutation.cause.entity, .node = cause_node };
     if (self.facts.getPtr(key)) |current| {
         self.allocator.free(key);
-        if (mutation.timestamp.compare(current.timestamp) != .gt) return false;
+        if (mutation.timestamp.compare(current.timestamp) != .gt) {
+            self.allocator.free(value);
+            self.allocator.free(cause_node);
+            return false;
+        }
         self.allocator.free(current.value);
-        current.* = .{ .value = try self.allocator.dupe(u8, mutation.value), .timestamp = mutation.timestamp, .cause = mutation.cause };
+        self.allocator.free(current.cause.node);
+        current.* = .{ .value = value, .timestamp = mutation.timestamp, .cause = cause };
     } else {
-        try self.facts.put(self.allocator, key, .{ .value = try self.allocator.dupe(u8, mutation.value), .timestamp = mutation.timestamp, .cause = mutation.cause });
+        self.facts.put(self.allocator, key, .{ .value = value, .timestamp = mutation.timestamp, .cause = cause }) catch |err| {
+            self.allocator.free(key);
+            return err;
+        };
     }
     try self.pending.append(self.allocator, .{ .id = self.next_id, .namespace = try self.allocator.dupe(u8, mutation.namespace), .entity = mutation.entity, .component = mutation.component });
     self.next_id += 1;
