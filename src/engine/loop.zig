@@ -83,10 +83,14 @@ pub const InferenceLoop = struct {
     /// Run one complete inference cycle driven by one dirty entry.
     /// Returns the number of rules fired and the durable dirty ID (if any).
     pub fn runCycle(self: *Self) !struct { fired: usize, durable_id: ?i64 } {
+        return self.runCycleWithSource(true);
+    }
+
+    fn runCycleWithSource(self: *Self, use_durable_source: bool) !struct { fired: usize, durable_id: ?i64 } {
         var rules_fired: usize = 0;
 
         var durable_id: ?i64 = null;
-        const dirty_entry = if (self.context.storage) |_| blk: {
+        const dirty_entry = if (use_durable_source and self.context.storage != null) blk: {
             const pending = (try self.context.nextPendingDirty()) orelse
                 return .{ .fired = 0, .durable_id = null };
             durable_id = pending.id;
@@ -181,8 +185,8 @@ pub const InferenceLoop = struct {
         var durable_id: ?i64 = null;
         const execution_start = std.Io.Clock.awake.now(self.context.io);
 
-        for (0..self.max_depth) |_| {
-            const result = try self.runCycle();
+        for (0..self.max_depth) |depth| {
+            const result = try self.runCycleWithSource(depth == 0);
             // Capture the dirty ID from the first cycle; subsequent cycles are
             // transitive and do not have their own durable IDs.
             if (durable_id == null) durable_id = result.durable_id;

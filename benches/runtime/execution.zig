@@ -24,6 +24,14 @@ const wasm_wire = @import("../../src/wasm/wire.zig");
 
 const n_iters: usize = 100_000;
 
+fn removeBenchmarkFiles(io: std.Io, path: []const u8) void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    var wal_buf: [160]u8 = undefined;
+    if (std.fmt.bufPrint(&wal_buf, "{s}.slung.wal", .{path})) |wal_path| {
+        std.Io.Dir.cwd().deleteFile(io, wal_path) catch {};
+    } else |_| {}
+}
+
 fn elapsedNs(io: std.Io, start: std.Io.Timestamp) u64 {
     return @intCast(start.untilNow(io, .awake).toNanoseconds());
 }
@@ -157,8 +165,13 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
         claim_arc.release();
     }
 
-    var storage = try Storage.open(allocator, io, "runtime-benchmark.db");
-    defer storage.deinit();
+    const storage_path = "runtime-benchmark.db";
+    removeBenchmarkFiles(io, storage_path);
+    var storage = try Storage.open(allocator, io, storage_path);
+    defer {
+        storage.deinit();
+        removeBenchmarkFiles(io, storage_path);
+    }
 
     var clock = Hlc.init(io, 1);
     var wasm_module: *zwasm.WasmModule = undefined;
@@ -216,7 +229,7 @@ pub fn run(allocator: Allocator, io: std.Io) !void {
         .ptr = &dispatcher,
         .dispatch_fn = WasmRuleDispatcher.dispatch,
     };
-    var loop = InferenceLoop.init(&context, rule_dispatcher, 1, allocator);
+    var loop = InferenceLoop.init(&context, rule_dispatcher, 10, allocator);
     defer loop.deinit();
 
     const input = "{\"value\": 42.0}";

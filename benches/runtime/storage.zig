@@ -15,7 +15,7 @@ fn removeDatabase(io: std.Io, path: []const u8) !void {
         else => return err,
     };
     var wal_buf: [128]u8 = undefined;
-    const wal_path = try std.fmt.bufPrint(&wal_buf, "{s}-wal", .{path});
+    const wal_path = try std.fmt.bufPrint(&wal_buf, "{s}.slung.wal", .{path});
     std.Io.Dir.cwd().deleteFile(io, wal_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
