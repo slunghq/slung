@@ -198,7 +198,7 @@ pub const InferenceLoop = struct {
             // transitive and do not have their own durable IDs.
             if (durable_id == null) durable_id = result.durable_id;
             total_fired += result.fired;
-            if (result.fired == 0) {
+            if (result.fired == 0 and !self.hasReadyWork()) {
                 converged = true;
                 break;
             }
