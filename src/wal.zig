@@ -498,6 +498,10 @@ fn applyMutationNoDirty(self: *Self, mutation: FactMutation) !void {
 }
 
 fn applyMutation(self: *Self, mutation: FactMutation) !bool {
+    try self.pending.ensureUnusedCapacity(self.allocator, 1);
+    var pending_namespace: ?[]u8 = try self.allocator.dupe(u8, mutation.namespace);
+    errdefer if (pending_namespace) |namespace| self.allocator.free(namespace);
+
     const key = try makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component);
     const value = try self.allocator.dupe(u8, mutation.value);
     errdefer self.allocator.free(value);
@@ -509,6 +513,8 @@ fn applyMutation(self: *Self, mutation: FactMutation) !bool {
         if (mutation.timestamp.compare(current.timestamp) != .gt) {
             self.allocator.free(value);
             self.allocator.free(cause_node);
+            self.allocator.free(pending_namespace.?);
+            pending_namespace = null;
             return false;
         }
         self.allocator.free(current.value);
@@ -520,7 +526,13 @@ fn applyMutation(self: *Self, mutation: FactMutation) !bool {
             return err;
         };
     }
-    try self.pending.append(self.allocator, .{ .id = self.next_id, .namespace = try self.allocator.dupe(u8, mutation.namespace), .entity = mutation.entity, .component = mutation.component });
+    self.pending.appendAssumeCapacity(.{
+        .id = self.next_id,
+        .namespace = pending_namespace.?,
+        .entity = mutation.entity,
+        .component = mutation.component,
+    });
+    pending_namespace = null;
     self.next_id += 1;
     return true;
 }

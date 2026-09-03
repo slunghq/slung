@@ -171,6 +171,12 @@ pub const InferenceLoop = struct {
         return @intCast(start.untilNow(io, .awake).toNanoseconds());
     }
 
+    fn hasReadyWork(self: *Self) bool {
+        var queue_guard = self.context.dirty_queue.getMut().lock();
+        defer queue_guard.deinit();
+        return !queue_guard.get().is_empty();
+    }
+
     /// Run the full inference cascade from one dirty entry until convergence.
     /// Flushes all rule-produced outputs as one WAL cascade checkpoint when done.
     /// Returns total number of rules fired.
@@ -183,6 +189,7 @@ pub const InferenceLoop = struct {
     pub fn runTimed(self: *Self) !RunTiming {
         var total_fired: usize = 0;
         var durable_id: ?i64 = null;
+        var converged = false;
         const execution_start = std.Io.Clock.awake.now(self.context.io);
 
         for (0..self.max_depth) |depth| {
@@ -191,7 +198,15 @@ pub const InferenceLoop = struct {
             // transitive and do not have their own durable IDs.
             if (durable_id == null) durable_id = result.durable_id;
             total_fired += result.fired;
-            if (result.fired == 0) break;
+            if (result.fired == 0) {
+                converged = true;
+                break;
+            }
+        }
+
+        if (!converged and self.context.storage != null and self.hasReadyWork()) {
+            self.context.discardCascade();
+            return error.MaxDepthExceeded;
         }
 
         const execution_ns = elapsedNs(self.context.io, execution_start);
