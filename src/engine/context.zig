@@ -119,6 +119,19 @@ pub const Context = struct {
     // Cascade accumulator: rule-produced mutations collected during propagation.
     // Flushed to WAL as one checkpoint after cascade convergence.
     cascade_outputs: std.ArrayListUnmanaged(Storage.FactMutation) = .empty,
+    cascade_error: ?anyerror = null,
+
+    pub fn beginCascade(self: *Self) void {
+        self.cascade_error = null;
+    }
+
+    pub fn recordCascadeError(self: *Self, err: anyerror) void {
+        if (self.cascade_error == null) self.cascade_error = err;
+    }
+
+    pub fn getCascadeError(self: *Self) ?anyerror {
+        return self.cascade_error;
+    }
 
     /// Initialize context with shared resources.
     pub fn init(

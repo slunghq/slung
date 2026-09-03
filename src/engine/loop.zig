@@ -187,6 +187,7 @@ pub const InferenceLoop = struct {
     /// Benchmark/diagnostic form of run. Separates in-memory rule execution
     /// from the final cascade checkpoint without changing execution behavior.
     pub fn runTimed(self: *Self) !RunTiming {
+        self.context.beginCascade();
         var total_fired: usize = 0;
         var durable_id: ?i64 = null;
         var converged = false;
@@ -194,6 +195,10 @@ pub const InferenceLoop = struct {
 
         for (0..self.max_depth) |depth| {
             const result = try self.runCycleWithSource(depth == 0);
+            if (self.context.getCascadeError()) |err| {
+                self.context.discardCascade();
+                return err;
+            }
             // Capture the dirty ID from the first cycle; subsequent cycles are
             // transitive and do not have their own durable IDs.
             if (durable_id == null) durable_id = result.durable_id;

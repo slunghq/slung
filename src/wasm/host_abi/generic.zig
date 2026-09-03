@@ -179,7 +179,11 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
             // Signal dirty so transitive rules fire.
             var queue_guard = ctx.dirty_queue.getMut().lock();
             defer queue_guard.deinit();
-            _ = queue_guard.get().push(.{ .entity = entity_id, .component = component_id }) catch {};
+            queue_guard.get().push(.{ .entity = entity_id, .component = component_id }) catch |err| {
+                ctx.recordCascadeError(err);
+                try vm.pushOperand(@as(u64, 6));
+                return;
+            };
         }
         break :blk memory_accepted;
     } else blk: {
@@ -194,10 +198,14 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         if (memory_accepted) {
             var queue_guard = ctx.dirty_queue.getMut().lock();
             defer queue_guard.deinit();
-            _ = queue_guard.get().push(.{
+            queue_guard.get().push(.{
                 .entity = entity_id,
                 .component = component_id,
-            }) catch {};
+            }) catch |err| {
+                ctx.recordCascadeError(err);
+                try vm.pushOperand(@as(u64, 6));
+                return;
+            };
         }
         break :blk memory_accepted;
     };

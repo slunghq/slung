@@ -440,7 +440,15 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
         self.mutex.unlock(self.io);
         self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
     }
+    // Enqueue before changing WAL-owned live state. The worker cannot take
+    // this request until the mutex is released, so an enqueue failure leaves
+    // the pending root and fact map untouched.
+    self.requests.append(self.allocator, request) catch |err| {
+        self.mutex.unlock(self.io);
+        return err;
+    };
     for (mutations) |mutation| self.applyMutationNoDirty(mutation) catch |err| {
+        _ = self.requests.pop();
         self.mutex.unlock(self.io);
         return err;
     };
@@ -451,10 +459,6 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
             break;
         }
     }
-    self.requests.append(self.allocator, request) catch |err| {
-        self.mutex.unlock(self.io);
-        return err;
-    };
     self.mutex.unlock(self.io);
 
     if (durability == .eventual) return;
