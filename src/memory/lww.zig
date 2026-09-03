@@ -96,6 +96,21 @@ pub const LwwRegistry = struct {
         return self.entries.get(key);
     }
 
+    /// Restore the value that preceded a write, but only if the current
+    /// timestamp still matches the failed write. Used to roll back a signal
+    /// that could not be scheduled.
+    pub fn rollbackPut(self: *Self, key: []const u8, timestamp: Timestamp, previous: ?Entry) !void {
+        const current = self.entries.getPtr(key) orelse return error.RollbackTargetMissing;
+        if (current.hlc.compare(timestamp) != .eq) return error.RollbackTargetChanged;
+        if (previous) |old| {
+            const restored_value = try self.dupeValue(old.value);
+            self.freeValue(current.value);
+            current.* = .{ .hlc = old.hlc, .value = restored_value, .cause = old.cause };
+        } else {
+            _ = self.remove(key);
+        }
+    }
+
     /// Remove a key. Returns true if it existed.
     pub inline fn remove(self: *Self, key: []const u8) bool {
         if (!self.bloom.contains(key)) return false;

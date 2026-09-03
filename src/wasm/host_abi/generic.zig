@@ -153,11 +153,25 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         return;
     };
 
+    // Do not publish a fact that cannot be scheduled. A queue-full signal
+    // must fail before LWW or cascade state is mutated.
+    {
+        var queue_capacity_guard = ctx.dirty_queue.getMut().lock();
+        defer queue_capacity_guard.deinit();
+        if (queue_capacity_guard.get().isFull()) {
+            ctx.recordCascadeError(error.QueueFull);
+            try vm.pushOperand(@as(u64, 6));
+            return;
+        }
+    }
+
     const accepted = if (ctx.storage) |_| blk: {
+        var previous_entry: ?LwwRegistry.Entry = null;
         // Update in-memory LWW first.
         const memory_accepted = blk2: {
             var store_guard = ctx.lww_store.getMut().lock();
             defer store_guard.deinit();
+            previous_entry = store_guard.get().get(key_str);
             break :blk2 store_guard.get().put(key_str, ts, parsed_value, cause) catch {
                 try vm.pushOperand(@as(u64, 5));
                 return;
@@ -178,18 +192,27 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
             };
             // Signal dirty so transitive rules fire.
             var queue_guard = ctx.dirty_queue.getMut().lock();
-            defer queue_guard.deinit();
-            queue_guard.get().push(.{ .entity = entity_id, .component = component_id }) catch |err| {
+            const signal_result = queue_guard.get().push(.{ .entity = entity_id, .component = component_id });
+            queue_guard.deinit();
+            if (signal_result) |_| {} else |err| {
+                var store_guard = ctx.lww_store.getMut().lock();
+                defer store_guard.deinit();
+                store_guard.get().rollbackPut(key_str, ts, previous_entry) catch |rollback_err| {
+                    ctx.recordCascadeError(rollback_err);
+                    try vm.pushOperand(@as(u64, 5));
+                    return;
+                };
                 ctx.recordCascadeError(err);
                 try vm.pushOperand(@as(u64, 6));
                 return;
-            };
+            }
         }
         break :blk memory_accepted;
     } else blk: {
         var store_guard = ctx.lww_store.getMut().lock();
         defer store_guard.deinit();
         const store = store_guard.get();
+        const previous_entry = store.get(key_str);
         const memory_accepted = store.put(key_str, ts, parsed_value, cause) catch {
             try vm.pushOperand(@as(u64, 5));
             return;
@@ -202,6 +225,11 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 .entity = entity_id,
                 .component = component_id,
             }) catch |err| {
+                store.rollbackPut(key_str, ts, previous_entry) catch |rollback_err| {
+                    ctx.recordCascadeError(rollback_err);
+                    try vm.pushOperand(@as(u64, 5));
+                    return;
+                };
                 ctx.recordCascadeError(err);
                 try vm.pushOperand(@as(u64, 6));
                 return;

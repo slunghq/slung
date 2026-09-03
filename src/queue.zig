@@ -84,6 +84,10 @@ pub const QueueInner = struct {
     pub fn is_empty(self: *QueueInner) bool {
         return self.count == 0;
     }
+
+    pub fn is_full(self: *QueueInner) bool {
+        return self.count >= self.entries.len;
+    }
 };
 
 /// Wrapper that owns both the allocator and the shared queue.
@@ -143,6 +147,13 @@ pub const DirtyQueue = struct {
         var guard = mutex.lock();
         defer guard.deinit();
         try guard.get().*.push(entry);
+    }
+
+    pub fn isFull(self: Self) bool {
+        const mutex = self.shared.getMut();
+        var guard = mutex.lock();
+        defer guard.deinit();
+        return guard.get().*.is_full();
     }
 
     /// Pop an entry from the queue without blocking (acquires lock).

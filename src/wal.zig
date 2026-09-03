@@ -452,13 +452,7 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
         self.mutex.unlock(self.io);
         return err;
     };
-    for (self.pending.items, 0..) |item, i| {
-        if (item.id == ack_id) {
-            item.deinit(self.allocator);
-            _ = self.pending.orderedRemove(i);
-            break;
-        }
-    }
+    if (durability == .eventual) self.removePending(ack_id);
     self.mutex.unlock(self.io);
 
     if (durability == .eventual) return;
@@ -472,6 +466,20 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
     self.mutex.unlock(self.io);
     request.deinit();
     if (err) |failure| return failure;
+
+    self.mutex.lockUncancelable(self.io);
+    self.removePending(ack_id);
+    self.mutex.unlock(self.io);
+}
+
+fn removePending(self: *Self, ack_id: i64) void {
+    for (self.pending.items, 0..) |item, i| {
+        if (item.id == ack_id) {
+            item.deinit(self.allocator);
+            _ = self.pending.orderedRemove(i);
+            return;
+        }
+    }
 }
 
 /// Applies a mutation to the in-memory fact map without adding a pending dirty entry.
