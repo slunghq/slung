@@ -302,9 +302,30 @@ fn workerMain(self: *Self) void {
         // Publish them only after the record and its fsync have succeeded.
         if (failure == null) {
             self.mutex.lockUncancelable(self.io);
+            const publication_pending_start = self.pending.items.len;
+            const publication_next_id = self.next_id;
+            var publication_undo: std.ArrayList(FactUndo) = .empty;
             for (batch.items) |request| {
                 if (!request.apply_after_write) continue;
                 for (request.mutations.items, 0..) |mutation, i| {
+                    const key = makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component) catch |err| {
+                        failure = err;
+                        break;
+                    };
+                    const previous = if (self.facts.get(key)) |fact|
+                        (cloneFact(self.allocator, fact) catch |err| {
+                            self.allocator.free(key);
+                            failure = err;
+                            break;
+                        })
+                    else
+                        null;
+                    publication_undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
+                        self.allocator.free(key);
+                        if (previous) |fact| fact.deinit(self.allocator);
+                        failure = err;
+                        break;
+                    };
                     if (request.record_kind == RecordCascade) {
                         self.applyMutationNoDirty(mutation) catch |err| {
                             failure = err;
@@ -319,6 +340,15 @@ fn workerMain(self: *Self) void {
                 }
                 if (failure != null) break;
             }
+            if (failure != null) {
+                self.rollbackFacts(publication_undo.items);
+                self.rollbackPending(publication_pending_start, publication_next_id);
+            }
+            for (publication_undo.items) |item| {
+                self.allocator.free(item.key);
+                if (item.previous) |fact| fact.deinit(self.allocator);
+            }
+            publication_undo.deinit(self.allocator);
             self.mutex.unlock(self.io);
         }
 
