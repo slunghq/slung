@@ -22,6 +22,11 @@ pub const Fact = struct {
     }
 };
 
+const FactUndo = struct {
+    key: []u8,
+    previous: ?Fact,
+};
+
 pub const PendingDirty = struct {
     id: i64,
     namespace: []u8,
@@ -46,6 +51,7 @@ const Request = struct {
     done: bool = false,
     err: ?anyerror = null,
     caller_waits: bool = false,
+    apply_after_write: bool = false,
 
     fn deinit(self: *Request) void {
         for (self.mutations.items) |mutation| {
@@ -153,7 +159,7 @@ pub fn enqueueBatch(self: *Self, mutations: []const FactMutation, accepted: []bo
     if (self.worker == null) try self.start();
 
     var request = try self.allocator.create(Request);
-    request.* = .{ .allocator = self.allocator, .accepted = try self.allocator.alloc(bool, mutations.len), .caller_waits = durability == .strict };
+    request.* = .{ .allocator = self.allocator, .accepted = try self.allocator.alloc(bool, mutations.len), .caller_waits = durability == .strict, .apply_after_write = durability == .strict };
     errdefer request.deinit();
     @memset(request.accepted, false);
     for (mutations) |mutation| {
@@ -177,16 +183,60 @@ pub fn enqueueBatch(self: *Self, mutations: []const FactMutation, accepted: []bo
         self.mutex.unlock(self.io);
         self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
     }
-    for (request.mutations.items, 0..) |mutation, i| {
-        request.accepted[i] = self.applyMutation(mutation) catch |err| {
-            self.mutex.unlock(self.io);
-            return err;
-        };
-    }
-    self.requests.append(self.allocator, request) catch |err| {
+    // Reserve admission before publishing eventual mutations. The worker
+    // cannot consume this slot while the mutex is held.
+    self.requests.ensureUnusedCapacity(self.allocator, 1) catch |err| {
         self.mutex.unlock(self.io);
         return err;
     };
+    if (!request.apply_after_write) {
+        const pending_start = self.pending.items.len;
+        const next_id_start = self.next_id;
+        var undo: std.ArrayList(FactUndo) = .empty;
+        defer {
+            for (undo.items) |item| {
+                self.allocator.free(item.key);
+                if (item.previous) |fact| fact.deinit(self.allocator);
+            }
+            undo.deinit(self.allocator);
+        }
+        for (request.mutations.items, 0..) |mutation, i| {
+            const key = makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component) catch |err| {
+                self.rollbackFacts(undo.items);
+                self.rollbackPending(pending_start, next_id_start);
+                self.mutex.unlock(self.io);
+                return err;
+            };
+            const previous = if (self.facts.get(key)) |fact|
+                (cloneFact(self.allocator, fact) catch |err| {
+                    self.allocator.free(key);
+                    self.rollbackFacts(undo.items);
+                    self.rollbackPending(pending_start, next_id_start);
+                    self.mutex.unlock(self.io);
+                    return err;
+                })
+            else
+                null;
+            undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
+                self.allocator.free(key);
+                if (previous) |fact| fact.deinit(self.allocator);
+                self.rollbackFacts(undo.items);
+                self.rollbackPending(pending_start, next_id_start);
+                self.mutex.unlock(self.io);
+                return err;
+            };
+            request.accepted[i] = self.applyMutation(mutation) catch |err| {
+                self.rollbackFacts(undo.items);
+                self.rollbackPending(pending_start, next_id_start);
+                self.mutex.unlock(self.io);
+                return err;
+            };
+        }
+    }
+    // Capacity was reserved while holding the same mutex the worker uses.
+    // appendAssumeCapacity makes admission atomic with respect to mutation
+    // publication: a queue allocation failure cannot expose live state.
+    self.requests.appendAssumeCapacity(request);
     if (durability == .eventual) {
         @memcpy(accepted, request.accepted);
         self.mutex.unlock(self.io);
@@ -246,6 +296,30 @@ fn workerMain(self: *Self) void {
             }
             if (failure == null) break;
             self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
+        }
+
+        // Strict requests are admitted to the queue before they become live.
+        // Publish them only after the record and its fsync have succeeded.
+        if (failure == null) {
+            self.mutex.lockUncancelable(self.io);
+            for (batch.items) |request| {
+                if (!request.apply_after_write) continue;
+                for (request.mutations.items, 0..) |mutation, i| {
+                    if (request.record_kind == RecordCascade) {
+                        self.applyMutationNoDirty(mutation) catch |err| {
+                            failure = err;
+                            break;
+                        };
+                    } else {
+                        request.accepted[i] = self.applyMutation(mutation) catch |err| {
+                            failure = err;
+                            break;
+                        };
+                    }
+                }
+                if (failure != null) break;
+            }
+            self.mutex.unlock(self.io);
         }
 
         self.mutex.lockUncancelable(self.io);
@@ -413,6 +487,7 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
         .record_kind = RecordCascade,
         .ack_id = ack_id,
         .caller_waits = durability == .strict,
+        .apply_after_write = durability == .strict,
     };
     errdefer request.deinit();
     for (mutations) |mutation| {
@@ -447,12 +522,49 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
         self.mutex.unlock(self.io);
         return err;
     };
-    for (mutations) |mutation| self.applyMutationNoDirty(mutation) catch |err| {
-        _ = self.requests.pop();
-        self.mutex.unlock(self.io);
-        return err;
-    };
-    if (durability == .eventual) self.removePending(ack_id);
+    if (durability == .eventual) {
+        var undo: std.ArrayList(FactUndo) = .empty;
+        defer {
+            for (undo.items) |item| {
+                self.allocator.free(item.key);
+                if (item.previous) |fact| fact.deinit(self.allocator);
+            }
+            undo.deinit(self.allocator);
+        }
+        for (mutations) |mutation| {
+            const key = makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component) catch |err| {
+                self.rollbackFacts(undo.items);
+                _ = self.requests.pop();
+                self.mutex.unlock(self.io);
+                return err;
+            };
+            const previous = if (self.facts.get(key)) |fact|
+                (cloneFact(self.allocator, fact) catch |err| {
+                    self.allocator.free(key);
+                    self.rollbackFacts(undo.items);
+                    _ = self.requests.pop();
+                    self.mutex.unlock(self.io);
+                    return err;
+                })
+            else
+                null;
+            undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
+                self.rollbackFacts(undo.items);
+                self.allocator.free(key);
+                if (previous) |fact| fact.deinit(self.allocator);
+                _ = self.requests.pop();
+                self.mutex.unlock(self.io);
+                return err;
+            };
+            self.applyMutationNoDirty(mutation) catch |err| {
+                self.rollbackFacts(undo.items);
+                _ = self.requests.pop();
+                self.mutex.unlock(self.io);
+                return err;
+            };
+        }
+        self.removePending(ack_id);
+    }
     self.mutex.unlock(self.io);
 
     if (durability == .eventual) return;
@@ -480,6 +592,45 @@ fn removePending(self: *Self, ack_id: i64) void {
             return;
         }
     }
+}
+
+fn rollbackFacts(self: *Self, undo: []const FactUndo) void {
+    var i = undo.len;
+    while (i > 0) {
+        i -= 1;
+        const item = undo[i];
+        if (self.facts.fetchRemove(item.key)) |removed| {
+            self.allocator.free(removed.key);
+            removed.value.deinit(self.allocator);
+        }
+        if (item.previous) |fact| {
+            const restored = cloneFact(self.allocator, fact) catch {
+                continue;
+            };
+            self.facts.put(self.allocator, item.key, restored) catch {
+                restored.deinit(self.allocator);
+            };
+        }
+    }
+}
+
+fn rollbackPending(self: *Self, pending_start: usize, next_id: i64) void {
+    while (self.pending.items.len > pending_start) {
+        const item = self.pending.pop().?;
+        item.deinit(self.allocator);
+    }
+    self.next_id = next_id;
+}
+
+fn cloneFact(allocator: std.mem.Allocator, fact: Fact) !Fact {
+    const value = try allocator.dupe(u8, fact.value);
+    errdefer allocator.free(value);
+    const node = try allocator.dupe(u8, fact.cause.node);
+    return .{ .value = value, .timestamp = fact.timestamp, .cause = .{
+        .cause = fact.cause.cause,
+        .entity = fact.cause.entity,
+        .node = node,
+    } };
 }
 
 /// Applies a mutation to the in-memory fact map without adding a pending dirty entry.

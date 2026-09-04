@@ -37,6 +37,24 @@ pub const LwwRegistry = struct {
         cause: CausalTag,
     };
 
+    /// Make an independent rollback snapshot. `get()` returns borrowed slices,
+    /// which must not be used as an undo record across a subsequent `put()`.
+    pub fn cloneEntry(self: *Self, entry: Entry) !Entry {
+        const value = try self.dupeValue(entry.value);
+        errdefer self.freeValue(value);
+        const node = try self.allocator.dupe(u8, entry.cause.node);
+        return .{ .hlc = entry.hlc, .value = value, .cause = .{
+            .cause = entry.cause.cause,
+            .entity = entry.cause.entity,
+            .node = node,
+        } };
+    }
+
+    pub fn freeEntry(self: *Self, entry: Entry) void {
+        self.freeValue(entry.value);
+        self.allocator.free(entry.cause.node);
+    }
+
     pub fn init(allocator: Allocator) LwwRegistry {
         return .{
             .allocator = allocator,
@@ -96,16 +114,16 @@ pub const LwwRegistry = struct {
         return self.entries.get(key);
     }
 
-    /// Restore the value that preceded a write, but only if the current
-    /// timestamp still matches the failed write. Used to roll back a signal
-    /// that could not be scheduled.
+    /// Restore an owned snapshot that preceded a write. The snapshot is
+    /// consumed, including when restoration fails.
     pub fn rollbackPut(self: *Self, key: []const u8, timestamp: Timestamp, previous: ?Entry) !void {
+        errdefer if (previous) |old| self.freeEntry(old);
         const current = self.entries.getPtr(key) orelse return error.RollbackTargetMissing;
         if (current.hlc.compare(timestamp) != .eq) return error.RollbackTargetChanged;
         if (previous) |old| {
-            const restored_value = try self.dupeValue(old.value);
             self.freeValue(current.value);
-            current.* = .{ .hlc = old.hlc, .value = restored_value, .cause = old.cause };
+            self.allocator.free(current.cause.node);
+            current.* = old;
         } else {
             _ = self.remove(key);
         }

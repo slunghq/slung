@@ -171,8 +171,14 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         const memory_accepted = blk2: {
             var store_guard = ctx.lww_store.getMut().lock();
             defer store_guard.deinit();
-            previous_entry = store_guard.get().get(key_str);
+            if (store_guard.get().get(key_str)) |entry| {
+                previous_entry = store_guard.get().cloneEntry(entry) catch {
+                    try vm.pushOperand(@as(u64, 5));
+                    return;
+                };
+            }
             break :blk2 store_guard.get().put(key_str, ts, parsed_value, cause) catch {
+                if (previous_entry) |entry| store_guard.get().freeEntry(entry);
                 try vm.pushOperand(@as(u64, 5));
                 return;
             };
@@ -187,6 +193,11 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 .timestamp = ts,
                 .cause = cause,
             }) catch {
+                var rollback_guard = ctx.lww_store.getMut().lock();
+                defer rollback_guard.deinit();
+                rollback_guard.get().rollbackPut(key_str, ts, previous_entry) catch |rollback_err| {
+                    ctx.recordCascadeError(rollback_err);
+                };
                 try vm.pushOperand(@as(u64, 5));
                 return;
             };
@@ -207,13 +218,27 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 return;
             }
         }
+        if (!memory_accepted) {
+            if (previous_entry) |entry| {
+                var store_guard = ctx.lww_store.getMut().lock();
+                defer store_guard.deinit();
+                store_guard.get().freeEntry(entry);
+            }
+        }
         break :blk memory_accepted;
     } else blk: {
         var store_guard = ctx.lww_store.getMut().lock();
         defer store_guard.deinit();
         const store = store_guard.get();
-        const previous_entry = store.get(key_str);
+        const previous_entry = if (store.get(key_str)) |entry|
+            (store.cloneEntry(entry) catch {
+                try vm.pushOperand(@as(u64, 5));
+                return;
+            })
+        else
+            null;
         const memory_accepted = store.put(key_str, ts, parsed_value, cause) catch {
+            if (previous_entry) |entry| store.freeEntry(entry);
             try vm.pushOperand(@as(u64, 5));
             return;
         };
@@ -234,6 +259,9 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 try vm.pushOperand(@as(u64, 6));
                 return;
             };
+        }
+        if (!memory_accepted) {
+            if (previous_entry) |entry| store.freeEntry(entry);
         }
         break :blk memory_accepted;
     };
