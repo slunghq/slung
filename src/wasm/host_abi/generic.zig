@@ -224,6 +224,10 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 defer store_guard.deinit();
                 store_guard.get().freeEntry(entry);
             }
+        } else if (previous_entry) |entry| {
+            var store_guard = ctx.lww_store.getMut().lock();
+            defer store_guard.deinit();
+            store_guard.get().freeEntry(entry);
         }
         break :blk memory_accepted;
     } else blk: {
@@ -262,6 +266,8 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         }
         if (!memory_accepted) {
             if (previous_entry) |entry| store.freeEntry(entry);
+        } else if (previous_entry) |entry| {
+            store.freeEntry(entry);
         }
         break :blk memory_accepted;
     };
