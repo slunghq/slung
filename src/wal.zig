@@ -274,11 +274,58 @@ fn workerMain(self: *Self) void {
         var batch = self.requests;
         self.requests = .empty;
         self.writing = true;
-        self.mutex.unlock(self.io);
 
         var failure: ?anyerror = null;
+        const publication_pending_start = self.pending.items.len;
+        const publication_next_id = self.next_id;
+        var publication_undo: std.ArrayList(FactUndo) = .empty;
+
+        // Strict requests must be published before the WAL is synced. This
+        // keeps every fallible allocation before the durability boundary; a
+        // successful sync can then never be followed by a live-state rollback.
+        for (batch.items) |request| {
+            if (!request.apply_after_write) continue;
+            for (request.mutations.items, 0..) |mutation, i| {
+                const key = makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component) catch |err| {
+                    failure = err;
+                    break;
+                };
+                const previous = if (self.facts.get(key)) |fact|
+                    (cloneFact(self.allocator, fact) catch |err| {
+                        self.allocator.free(key);
+                        failure = err;
+                        break;
+                    })
+                else
+                    null;
+                publication_undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
+                    self.allocator.free(key);
+                    if (previous) |fact| fact.deinit(self.allocator);
+                    failure = err;
+                    break;
+                };
+                if (request.record_kind == RecordCascade) {
+                    self.applyMutationNoDirty(mutation) catch |err| {
+                        failure = err;
+                        break;
+                    };
+                } else {
+                    request.accepted[i] = self.applyMutation(mutation) catch |err| {
+                        failure = err;
+                        break;
+                    };
+                }
+            }
+            if (failure != null) break;
+        }
+        if (failure != null) {
+            self.rollbackFacts(publication_undo.items);
+            self.rollbackPending(publication_pending_start, publication_next_id);
+        }
+        self.mutex.unlock(self.io);
+
         var attempt: usize = 0;
-        while (attempt < 3) : (attempt += 1) {
+        while (failure == null and attempt < 3) : (attempt += 1) {
             failure = null;
             for (batch.items) |request| {
                 const result = if (request.record_kind == RecordCascade)
@@ -300,49 +347,9 @@ fn workerMain(self: *Self) void {
             self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
         }
 
-        // Strict requests are admitted to the queue before they become live.
-        // Publish them only after the record and its fsync have succeeded.
-        if (failure == null) {
-            self.mutex.lockUncancelable(self.io);
-            const publication_pending_start = self.pending.items.len;
-            const publication_next_id = self.next_id;
-            var publication_undo: std.ArrayList(FactUndo) = .empty;
-            for (batch.items) |request| {
-                if (!request.apply_after_write) continue;
-                for (request.mutations.items, 0..) |mutation, i| {
-                    const key = makeKey(self.allocator, mutation.namespace, mutation.entity, mutation.component) catch |err| {
-                        failure = err;
-                        break;
-                    };
-                    const previous = if (self.facts.get(key)) |fact|
-                        (cloneFact(self.allocator, fact) catch |err| {
-                            self.allocator.free(key);
-                            failure = err;
-                            break;
-                        })
-                    else
-                        null;
-                    publication_undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
-                        self.allocator.free(key);
-                        if (previous) |fact| fact.deinit(self.allocator);
-                        failure = err;
-                        break;
-                    };
-                    if (request.record_kind == RecordCascade) {
-                        self.applyMutationNoDirty(mutation) catch |err| {
-                            failure = err;
-                            break;
-                        };
-                    } else {
-                        request.accepted[i] = self.applyMutation(mutation) catch |err| {
-                            failure = err;
-                            break;
-                        };
-                    }
-                }
-                if (failure != null) break;
-            }
-            if (failure != null) {
+        self.mutex.lockUncancelable(self.io);
+        if (failure != null or publication_undo.items.len != 0) {
+            if (failure != null and publication_undo.items.len != 0) {
                 self.rollbackFacts(publication_undo.items);
                 self.rollbackPending(publication_pending_start, publication_next_id);
             }
@@ -350,9 +357,9 @@ fn workerMain(self: *Self) void {
                 self.allocator.free(item.key);
                 if (item.previous) |fact| fact.deinit(self.allocator);
             }
-            publication_undo.deinit(self.allocator);
-            self.mutex.unlock(self.io);
         }
+        publication_undo.deinit(self.allocator);
+        self.mutex.unlock(self.io);
 
         self.mutex.lockUncancelable(self.io);
         self.writing = false;
