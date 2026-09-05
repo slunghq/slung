@@ -106,6 +106,8 @@ pub const Context = struct {
 
     // Current execution context (mutable per cycle)
     namespace: types.NamespaceId,
+    /// Stable storage scope for this loaded module.
+    module_name: []const u8 = "module",
     current_entity: types.EntityId,
     current_rule: types.RuleId,
 

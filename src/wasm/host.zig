@@ -13,6 +13,7 @@ const zwasm = @import("zwasm");
 const build_options = @import("build_options");
 
 pub const generic = @import("host_abi/generic.zig");
+pub const store = @import("host_abi/store.zig");
 pub const http = if (build_options.enable_connectors) @import("host_abi/http.zig") else null;
 pub const queue = @import("host_abi/queue.zig");
 pub const tcp_udp = @import("host_abi/tcp_udp.zig");
@@ -22,6 +23,7 @@ fn buildHostImports(allocator: std.mem.Allocator, context: usize) !std.ArrayList
     var host_fns: std.ArrayList(zwasm.HostFnEntry) = .empty;
 
     try generic.appendHostFunctions(&host_fns, allocator, context);
+    try store.appendHostFunctions(&host_fns, allocator, context);
     if (build_options.enable_connectors) {
         try @import("host_abi/http.zig").appendHostFunctions(&host_fns, allocator, context);
         try @import("host_abi/ws.zig").appendHostFunctions(&host_fns, allocator, context);

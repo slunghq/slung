@@ -33,6 +33,7 @@ const HttpSource = @import("connectors/shared.zig").Source(http_mod.Server.Reque
 pub const ModuleConfig = struct {
     io: std.Io,
     namespace: []const u8,
+    module_name: []const u8 = "module",
     node_id: []const u8,
     server: *ws_mod.Server,
     http_server: *http_mod.Server,
@@ -154,6 +155,7 @@ pub const ModuleSession = struct {
             config.node_id,
             config.storage,
         );
+        session.context.module_name = config.module_name;
 
         const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&session.context));
         errdefer allocator.free(env_imports.source.host_fns);

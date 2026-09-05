@@ -8,6 +8,7 @@
 
 pub mod generic;
 pub mod http;
+pub mod store;
 pub mod tcp_udp;
 pub mod ws;
 
