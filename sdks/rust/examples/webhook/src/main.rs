@@ -1,21 +1,6 @@
 use slung::prelude::*;
 use slung_macros::{component, rule, source};
 
-/// Incoming webhook messages from external systems
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum IncomingMessage {
-    InventoryUpdate {
-        sku: String,
-        quantity: u32,
-    },
-    OrderEvent {
-        order_id: String,
-        sku: String,
-        quantity: u32,
-    },
-}
-
 // Component types representing inventory state
 #[component]
 struct InventoryLevel {
@@ -49,25 +34,11 @@ struct WebhookSource {
 
 // Mappers — translate raw HTTP POST body into typed components
 fn parse_inventory_update(raw: &[u8]) -> Result<InventoryLevel> {
-    match serde_json::from_slice::<IncomingMessage>(raw)? {
-        IncomingMessage::InventoryUpdate { sku, quantity } => Ok(InventoryLevel { sku, quantity }),
-        _ => Err(std::io::Error::other("payload is not an inventory update")),
-    }
+    Ok(serde_json::from_slice(raw)?)
 }
 
 fn parse_order_event(raw: &[u8]) -> Result<Order> {
-    match serde_json::from_slice::<IncomingMessage>(raw)? {
-        IncomingMessage::OrderEvent {
-            order_id,
-            sku,
-            quantity,
-        } => Ok(Order {
-            order_id,
-            sku,
-            quantity,
-        }),
-        _ => Err(std::io::Error::other("payload is not an order event")),
-    }
+    Ok(serde_json::from_slice(raw)?)
 }
 
 // Rule 1: Detect low stock levels

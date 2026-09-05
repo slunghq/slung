@@ -1,112 +1,65 @@
 #!/bin/sh
-# Webhook example test script
-# Tests the HTTP webhook receiver with inventory and order events
+set -eu
 
-set -e
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)
+EXAMPLE_DIR="$ROOT/sdks/rust/examples/webhook"
+MODULE="$EXAMPLE_DIR/target/wasm32-wasip1/release/webhook.wasm"
 
-echo "=== Slung HTTP Webhook Example ==="
-echo ""
-echo "This script sends test webhooks to the Slung runtime."
-echo "Make sure Slung is running first:"
-echo ""
-echo "  cd slung"
-echo "  zig build run -- run --module src/testdata/webhook.wasm --namespace test_ns --node-id node-1"
-echo ""
-echo "Then run this script to send test webhooks."
-echo ""
+slung_pid=""
+cleanup() {
+    if [ -n "$slung_pid" ]; then kill "$slung_pid" 2>/dev/null || true; fi
+    pkill -TERM -f '[s]lung.*dev' 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
 
-SLUNG_HOST="${SLUNG_HOST:-localhost}"
-SLUNG_PORT="${SLUNG_PORT:-2074}"
-ENDPOINT="http://${SLUNG_HOST}:${SLUNG_PORT}/test_ns/api/inventory"
+echo "Building webhook example..."
+(
+    cd "$EXAMPLE_DIR"
+    cargo build --target wasm32-wasip1 --release
+)
 
-echo "Testing webhook endpoint: $ENDPOINT"
-echo ""
+echo "Starting Slung..."
+(
+    cd "$ROOT"
+    zig build run -- dev \
+        --module "$MODULE" \
+        --namespace webhook_test \
+        --node-id node-1 \
+        --ws-port 2077 \
+        --http-port 2078
+) >"$EXAMPLE_DIR/slung.log" 2>&1 &
+slung_pid=$!
 
-# Test 1: Send inventory update (good stock)
-echo "Test 1: Sending inventory update - normal stock levels"
-curl -X POST "$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sku": "WIDGET-001",
-    "quantity": 150
-  }' \
-  -w "\nStatus: %{http_code}\n" \
-  -s
-echo ""
+ENDPOINT="http://127.0.0.1:2078/webhook_test/api/inventory"
+for _ in $(seq 1 50); do
+    if curl -sS -o /dev/null -X POST "$ENDPOINT" \
+        -H 'Content-Type: application/json' \
+        -d '{"sku":"READINESS","quantity":150}' 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
 
-# Test 2: Send inventory update (low stock)
-echo "Test 2: Sending inventory update - low stock (should trigger alert)"
-curl -X POST "$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sku": "GADGET-002",
-    "quantity": 30
-  }' \
-  -w "\nStatus: %{http_code}\n" \
-  -s
-echo ""
+echo "Sending inventory and order events..."
+curl -fsS -X POST "$ENDPOINT" \
+    -H 'Content-Type: application/json' \
+    -d '{"sku":"GADGET-002","quantity":30}' >/dev/null
+curl -fsS -X POST "$ENDPOINT" \
+    -H 'Content-Type: application/json' \
+    -d '{"sku":"CRITICAL-003","quantity":10}' >/dev/null
+curl -fsS -X POST "$ENDPOINT" \
+    -H 'Content-Type: application/json' \
+    -d '{"order_id":"ORD-2024-001","sku":"GADGET-002","quantity":5}' >/dev/null
 
-# Test 3: Send order event
-echo "Test 3: Sending order event"
-curl -X POST "$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "order_id": "ORD-2024-001",
-    "sku": "WIDGET-001",
-    "quantity": 25
-  }' \
-  -w "\nStatus: %{http_code}\n" \
-  -s
-echo ""
+for _ in $(seq 1 50); do
+    if grep -q 'LOW STOCK ALERT: GADGET-002 now at 30 units' "$EXAMPLE_DIR/slung.log" \
+        && grep -q 'EMERGENCY: CRITICAL-003 is critically low at 10 units' "$EXAMPLE_DIR/slung.log" \
+        && grep -q 'Order ORD-2024-001: 5 units of GADGET-002 reserved' "$EXAMPLE_DIR/slung.log"; then
+        echo "Webhook example passed."
+        exit 0
+    fi
+    sleep 0.1
+done
 
-# Test 4: Send inventory update (critical stock)
-echo "Test 4: Sending inventory update - critical stock (should trigger emergency alert)"
-curl -X POST "$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sku": "CRITICAL-003",
-    "quantity": 10
-  }' \
-  -w "\nStatus: %{http_code}\n" \
-  -s
-echo ""
-
-# Test 5: Send another order
-echo "Test 5: Sending another order"
-curl -X POST "$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "order_id": "ORD-2024-002",
-    "sku": "GADGET-002",
-    "quantity": 5
-  }' \
-  -w "\nStatus: %{http_code}\n" \
-  -s
-echo ""
-
-# Test 6: Invalid payload (should be rejected)
-echo "Test 6: Sending invalid payload (should get error)"
-curl -X POST "$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "invalid": "payload"
-  }' \
-  -w "\nStatus: %{http_code}\n" \
-  -s
-echo ""
-
-# Test 7: Unregistered endpoint (should 404)
-echo "Test 7: Sending to unregistered endpoint (should get 404)"
-curl -X POST "http://${SLUNG_HOST}:${SLUNG_PORT}/test_ns/api/unknown" \
-  -H "Content-Type: application/json" \
-  -d '{}' \
-  -w "\nStatus: %{http_code}\n" \
-  -s
-echo ""
-
-echo "=== Tests Complete ==="
-echo ""
-echo "Check the Slung runtime logs for rule execution output:"
-echo "  - LOW STOCK ALERT for GADGET-002 (30 units)"
-echo "  - Order processing for ORD-2024-001 and ORD-2024-002"
-echo "  - EMERGENCY alert for CRITICAL-003 (10 units)"
+cat "$EXAMPLE_DIR/slung.log"
+exit 1
