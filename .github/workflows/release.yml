@@ -26,29 +26,51 @@ jobs:
           - os: blacksmith-6vcpu-macos-latest
             artifact_os: macos
             artifact_arch: arm64
+          - os: blacksmith-2vcpu-windows-2025
+            artifact_os: windows
+            artifact_arch: x64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
       - name: Install Nix
+        if: matrix.artifact_os != 'windows'
         uses: cachix/install-nix-action@v31
 
-      - name: Build release binary
-        run: nix develop -c zig build -Doptimize=ReleaseFast
+      - name: Install Zig on Windows
+        if: matrix.artifact_os == 'windows'
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build release binary (Unix)
+        if: matrix.artifact_os != 'windows'
+        run: nix develop -c zig build --release=fast
+
+      - name: Build release binary (Windows)
+        if: matrix.artifact_os == 'windows'
+        shell: bash
+        run: zig build --release=fast
 
       - name: Package artifact
         env:
           OS: ${{ matrix.artifact_os }}
           ARCH: ${{ matrix.artifact_arch }}
           TAG: ${{ github.ref_name }}
+        shell: bash
         run: |
           mkdir -p dist
           name="slung-${TAG}-${OS}-${ARCH}"
-          cp zig-out/bin/slung "dist/slung"
-          chmod +x dist/slung
-          tar -C dist -czf "${name}.tar.gz" slung
-          shasum -a 256 "${name}.tar.gz" > "${name}.sha256"
+          if [ "${OS}" = "windows" ]; then
+            cp zig-out/bin/slung.exe "dist/slung.exe"
+            tar -C dist -czf "${name}.tar.gz" slung.exe
+          else
+            cp zig-out/bin/slung "dist/slung"
+            chmod +x dist/slung
+            tar -C dist -czf "${name}.tar.gz" slung
+          fi
+          sha256sum "${name}.tar.gz" > "${name}.sha256"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -64,8 +86,7 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           prerelease: true
-          body: |
-            See: [changelog](https://github.com/slunghq/slung/blob/${{ github.ref_name }}/docs/CHANGELOG.md).
+          body_path: docs/RELEASE.md
           files: |
             slung-${{ github.ref_name }}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}.tar.gz
             slung-${{ github.ref_name }}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}.sha256
