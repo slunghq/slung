@@ -120,7 +120,7 @@ const ModuleOptions = struct {
             .ws_port = parsePort(parsed, "--ws-port", deployment_config.ws_port orelse 2073),
             .http_port = parsePort(parsed, "--http-port", deployment_config.http_port orelse 2074),
             .storage_path = file.storage.path orelse "slung.db",
-            .durability = parseDurability(file.storage.durability),
+            .durability = parseDurability(parsed.value("--durability") orelse file.storage.durability),
         };
     }
 
@@ -324,7 +324,7 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, parsed: *const ParsedCommand
         .ws_port = ws_port,
         .http_port = http_port,
         .storage_path = file.storage.path orelse "slung.db",
-        .durability = parseDurability(file.storage.durability),
+        .durability = parseDurability(parsed.value("--durability") orelse file.storage.durability),
     });
 }
 
@@ -571,6 +571,7 @@ const checkFlags = [_]Flag{
 
 const runFlags = [_]Flag{
     .{ .name = "--node-id <id>", .aliases = &.{ "--node-id", "-n" }, .description = "Node identity", .takes_value = true },
+    .{ .name = "--durability <mode>", .aliases = &.{"--durability"}, .description = "WAL mode: eventual or strict", .takes_value = true },
     .{ .name = "--discovery-port <port>", .aliases = &.{ "--discovery-port", "-d" }, .description = "Deployment discovery port", .takes_value = true },
     .{ .name = "--ws-port <port>", .aliases = &.{ "--ws-port", "-w" }, .description = "WebSocket gateway port", .takes_value = true },
     .{ .name = "--http-port <port>", .aliases = &.{ "--http-port", "-H" }, .description = "HTTP webhook port", .takes_value = true },
@@ -578,6 +579,7 @@ const runFlags = [_]Flag{
 
 const devFlags = [_]Flag{
     .{ .name = "--module <path.wasm>", .aliases = &.{ "--module", "-m" }, .description = "Module to run", .takes_value = true },
+    .{ .name = "--durability <mode>", .aliases = &.{"--durability"}, .description = "WAL mode: eventual or strict", .takes_value = true },
     .{ .name = "--namespace <name>", .aliases = &.{ "--namespace", "-N" }, .description = "Isolation namespace (default: default)", .takes_value = true },
     .{ .name = "--node-id <id>", .aliases = &.{ "--node-id", "-n" }, .description = "Node identity (default: node-1)", .takes_value = true },
     .{ .name = "--ws-port <port>", .aliases = &.{ "--ws-port", "-w" }, .description = "WebSocket gateway port (default: 2073)", .takes_value = true },
