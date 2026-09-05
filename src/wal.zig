@@ -25,6 +25,7 @@ pub const Fact = struct {
 const FactUndo = struct {
     key: []u8,
     previous: ?Fact,
+    published_timestamp: Timestamp,
 };
 
 pub const PendingDirty = struct {
@@ -218,7 +219,11 @@ pub fn enqueueBatch(self: *Self, mutations: []const FactMutation, accepted: []bo
                 })
             else
                 null;
-            undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
+            undo.append(self.allocator, .{
+                .key = key,
+                .previous = previous,
+                .published_timestamp = mutation.timestamp,
+            }) catch |err| {
                 self.allocator.free(key);
                 if (previous) |fact| fact.deinit(self.allocator);
                 self.rollbackFacts(undo.items);
@@ -298,7 +303,11 @@ fn workerMain(self: *Self) void {
                     })
                 else
                     null;
-                publication_undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
+                publication_undo.append(self.allocator, .{
+                    .key = key,
+                    .previous = previous,
+                    .published_timestamp = mutation.timestamp,
+                }) catch |err| {
                     self.allocator.free(key);
                     if (previous) |fact| fact.deinit(self.allocator);
                     failure = err;
@@ -598,7 +607,11 @@ pub fn flushCascade(self: *Self, mutations: []const FactMutation, ack_id: i64, d
                 })
             else
                 null;
-            undo.append(self.allocator, .{ .key = key, .previous = previous }) catch |err| {
+            undo.append(self.allocator, .{
+                .key = key,
+                .previous = previous,
+                .published_timestamp = mutation.timestamp,
+            }) catch |err| {
                 self.rollbackFacts(undo.items);
                 self.allocator.free(key);
                 if (previous) |fact| fact.deinit(self.allocator);
@@ -649,12 +662,12 @@ fn rollbackFacts(self: *Self, undo: []FactUndo) void {
     while (i > 0) {
         i -= 1;
         const item = &undo[i];
+        const current = self.facts.getPtr(item.key) orelse continue;
+        if (!current.timestamp.eql(item.published_timestamp)) continue;
         if (item.previous) |fact| {
-            if (self.facts.getPtr(item.key)) |current| {
-                self.allocator.free(current.value);
-                current.* = fact;
-                item.previous = null;
-            }
+            self.allocator.free(current.value);
+            current.* = fact;
+            item.previous = null;
         } else if (self.facts.fetchRemove(item.key)) |removed| {
             self.allocator.free(removed.key);
             removed.value.deinit(self.allocator);
