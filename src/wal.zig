@@ -494,7 +494,7 @@ pub fn nextPendingFor(self: *Self, namespace: ?[]const u8) !?PendingDirty {
 pub fn ack(self: *Self, id: i64) !void {
     while (true) {
         self.mutex.lockUncancelable(self.io);
-        if (!self.writing) break;
+        if (!self.writing and self.requests.items.len == 0) break;
         self.mutex.unlock(self.io);
         self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
     }
