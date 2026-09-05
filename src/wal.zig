@@ -624,22 +624,20 @@ fn removePending(self: *Self, ack_id: i64) void {
     }
 }
 
-fn rollbackFacts(self: *Self, undo: []const FactUndo) void {
+fn rollbackFacts(self: *Self, undo: []FactUndo) void {
     var i = undo.len;
     while (i > 0) {
         i -= 1;
-        const item = undo[i];
-        if (self.facts.fetchRemove(item.key)) |removed| {
+        const item = &undo[i];
+        if (item.previous) |fact| {
+            if (self.facts.getPtr(item.key)) |current| {
+                self.allocator.free(current.value);
+                current.* = fact;
+                item.previous = null;
+            }
+        } else if (self.facts.fetchRemove(item.key)) |removed| {
             self.allocator.free(removed.key);
             removed.value.deinit(self.allocator);
-        }
-        if (item.previous) |fact| {
-            const restored = cloneFact(self.allocator, fact) catch {
-                continue;
-            };
-            self.facts.put(self.allocator, item.key, restored) catch {
-                restored.deinit(self.allocator);
-            };
         }
     }
 }
