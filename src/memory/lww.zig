@@ -35,6 +35,7 @@ pub const LwwRegistry = struct {
         hlc: Timestamp,
         value: Value,
         cause: CausalTag,
+        owns_cause_node: bool = false,
     };
 
     /// Make an independent rollback snapshot. `get()` returns borrowed slices,
@@ -43,16 +44,21 @@ pub const LwwRegistry = struct {
         const value = try self.dupeValue(entry.value);
         errdefer self.freeValue(value);
         const node = try self.allocator.dupe(u8, entry.cause.node);
-        return .{ .hlc = entry.hlc, .value = value, .cause = .{
-            .cause = entry.cause.cause,
-            .entity = entry.cause.entity,
-            .node = node,
-        } };
+        return .{
+            .hlc = entry.hlc,
+            .value = value,
+            .cause = .{
+                .cause = entry.cause.cause,
+                .entity = entry.cause.entity,
+                .node = node,
+            },
+            .owns_cause_node = true,
+        };
     }
 
     pub fn freeEntry(self: *Self, entry: Entry) void {
         self.freeValue(entry.value);
-        self.allocator.free(entry.cause.node);
+        if (entry.owns_cause_node) self.allocator.free(entry.cause.node);
     }
 
     pub fn init(allocator: Allocator) LwwRegistry {
@@ -67,7 +73,7 @@ pub const LwwRegistry = struct {
         var it = self.entries.iterator();
         while (it.next()) |kv| {
             self.allocator.free(kv.key_ptr.*);
-            self.freeValue(kv.value_ptr.value);
+            self.freeEntry(kv.value_ptr.*);
         }
         self.entries.deinit(self.allocator);
         self.bloom.deinit();
@@ -86,13 +92,14 @@ pub const LwwRegistry = struct {
 
         if (self.entries.getPtr(key)) |existing| {
             if (hlc_ts.compare(existing.hlc) != .gt) {
-                self.freeValue(owned_value);
                 return false;
             }
             self.freeValue(existing.value);
+            if (existing.owns_cause_node) self.allocator.free(existing.cause.node);
             existing.hlc = hlc_ts;
             existing.value = owned_value;
             existing.cause = cause;
+            existing.owns_cause_node = false;
             return true;
         }
 
@@ -122,6 +129,7 @@ pub const LwwRegistry = struct {
         if (current.hlc.compare(timestamp) != .eq) return error.RollbackTargetChanged;
         if (previous) |old| {
             self.freeValue(current.value);
+            if (current.owns_cause_node) self.allocator.free(current.cause.node);
             current.* = old;
         } else {
             _ = self.remove(key);
@@ -133,7 +141,7 @@ pub const LwwRegistry = struct {
         if (!self.bloom.contains(key)) return false;
         if (self.entries.fetchRemove(key)) |kv| {
             self.allocator.free(kv.key);
-            self.freeValue(kv.value.value);
+            self.freeEntry(kv.value);
             return true;
         }
         return false;
