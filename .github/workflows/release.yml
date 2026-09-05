@@ -20,15 +20,19 @@ jobs:
           - os: blacksmith-4vcpu-ubuntu-2404
             artifact_os: linux
             artifact_arch: x64
+            artifact_target: x86_64-linux-gnu
           - os: blacksmith-4vcpu-ubuntu-2404-arm
             artifact_os: linux
             artifact_arch: arm64
+            artifact_target: aarch64-linux-gnu
           - os: blacksmith-6vcpu-macos-latest
             artifact_os: macos
             artifact_arch: arm64
+            artifact_target: aarch64-macos
           - os: blacksmith-2vcpu-windows-2025
             artifact_os: windows
             artifact_arch: x64
+            artifact_target: x86_64-windows-gnu
 
     steps:
       - name: Checkout
@@ -46,12 +50,16 @@ jobs:
 
       - name: Build release binary (Unix)
         if: matrix.artifact_os != 'windows'
-        run: nix develop -c zig build --release=fast
+        env:
+          TARGET: ${{ matrix.artifact_target }}
+        run: nix develop -c zig build --release=fast -Dtarget=${TARGET}
 
       - name: Build release binary (Windows)
         if: matrix.artifact_os == 'windows'
+        env:
+          TARGET: ${{ matrix.artifact_target }}
         shell: bash
-        run: zig build --release=fast
+        run: zig build --release=fast -Dtarget=${TARGET}
 
       - name: Package artifact
         env:
