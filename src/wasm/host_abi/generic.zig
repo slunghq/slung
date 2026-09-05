@@ -228,23 +228,21 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 try vm.pushOperand(@as(u64, 5));
                 return;
             };
-            previous_entry = null;
             // Signal dirty so transitive rules fire.
             var queue_guard = ctx.dirty_queue.getMut().lock();
             const signal_result = queue_guard.get().push(.{ .entity = entity_id, .component = component_id });
             queue_guard.deinit();
             if (signal_result) |_| {} else |err| {
-                var store_guard = ctx.lww_store.getMut().lock();
-                defer store_guard.deinit();
-                store_guard.get().rollbackPut(key_str, ts, previous_entry) catch |rollback_err| {
-                    ctx.recordCascadeError(rollback_err);
-                    try vm.pushOperand(@as(u64, 5));
-                    return;
-                };
+                // accumulateMutation transferred the snapshot into the
+                // cascade undo log. Discard the whole failed cascade rather
+                // than rolling back this write with a cleared snapshot.
+                ctx.discardCascade();
+                previous_entry = null;
                 ctx.recordCascadeError(err);
                 try vm.pushOperand(@as(u64, 6));
                 return;
             }
+            previous_entry = null;
         }
         if (!memory_accepted) {
             if (previous_entry) |entry| {
