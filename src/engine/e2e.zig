@@ -158,7 +158,7 @@ test "E2E: multi-cycle cascade through rule chain" {
         claim_arc.release();
     }
 
-    var clock = Hlc.init(1, std.testing.io);
+    var clock = Hlc.init(std.testing.io, 1);
     var wasm_module: *zwasm.WasmModule = undefined;
     var context = Context.init(
         allocator,
@@ -172,6 +172,7 @@ test "E2E: multi-cycle cascade through rule chain" {
         wasm_module,
         "test_ns",
         "node-1",
+        null,
     );
 
     const env_imports = try wasm_host.createEnvImport(allocator, @intFromPtr(&context));

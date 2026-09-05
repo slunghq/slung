@@ -47,12 +47,26 @@ pub fn slung_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         return;
     };
 
-    var store_guard = ctx.lww_store.getMut().lock();
-    defer store_guard.deinit();
-    const store = store_guard.get();
+    var cached_value: ?types.Value = null;
+    {
+        var store_guard = ctx.lww_store.getMut().lock();
+        defer store_guard.deinit();
+        if (store_guard.get().get(key_str)) |entry| {
+            cached_value = switch (entry.value) {
+                .Bytes => |bytes| .{ .Bytes = try ctx.allocator.dupe(u8, bytes) },
+                else => entry.value,
+            };
+        }
+    }
+    defer if (cached_value) |value| if (value == .Bytes) ctx.allocator.free(value.Bytes);
 
-    const entry_opt = store.get(key_str);
-    if (entry_opt == null) {
+    const persisted = if (cached_value == null and ctx.storage != null)
+        (try ctx.loadFact(entity_id, component_id))
+    else
+        null;
+    defer if (persisted) |fact| fact.deinit(ctx.allocator);
+
+    if (cached_value == null and persisted == null) {
         try writeGuestU32(ctx.module, out_ptr, 0);
         try writeGuestU32(ctx.module, out_len, 0);
         try vm.pushOperand(@as(u64, 1));
@@ -62,7 +76,7 @@ pub fn slung_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
     var out: std.Io.Writer.Allocating = .init(ctx.allocator);
     defer out.deinit();
 
-    const value = entry_opt.?.value;
+    const value = cached_value orelse types.Value{ .Bytes = persisted.?.value };
     switch (value) {
         .Bool => |b| try std.json.Stringify.value(b, .{}, &out.writer),
         .Int => |i| try std.json.Stringify.value(i, .{}, &out.writer),
@@ -133,7 +147,7 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
 
     // namespace:entity:component
     var key_buf: [512]u8 = undefined;
-    const key_str = std.fmt.bufPrintZ(&key_buf, "{s}:{d}:{d}", .{
+    const key_str = std.fmt.bufPrint(&key_buf, "{s}:{d}:{d}", .{
         ctx.namespace,
         entity_id,
         component_id,
@@ -143,30 +157,148 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         return;
     };
 
-    var store_guard = ctx.lww_store.getMut().lock();
-    defer store_guard.deinit();
-    const store = store_guard.get();
+    if (ctx.storage != null) {
+        var missing = false;
+        {
+            var store_guard = ctx.lww_store.getMut().lock();
+            defer store_guard.deinit();
+            missing = store_guard.get().get(key_str) == null;
+        }
+        if (missing) {
+            if (try ctx.loadFact(entity_id, component_id)) |fact| {
+                defer fact.deinit(ctx.allocator);
+                var store_guard = ctx.lww_store.getMut().lock();
+                defer store_guard.deinit();
+                if (store_guard.get().get(key_str) == null) {
+                    _ = try store_guard.get().put(key_str, fact.timestamp, .{ .Bytes = fact.value }, .{
+                        .cause = fact.cause.cause,
+                        .entity = fact.cause.entity,
+                        .node = ctx.node_id,
+                    });
+                }
+            }
+        }
+    }
 
-    const accepted = store.put(key_str, ts, parsed_value, cause) catch {
-        try vm.pushOperand(@as(u64, 5));
-        return;
+    // Do not publish a fact that cannot be scheduled. A queue-full signal
+    // must fail before LWW or cascade state is mutated.
+    {
+        var queue_capacity_guard = ctx.dirty_queue.getMut().lock();
+        defer queue_capacity_guard.deinit();
+        if (queue_capacity_guard.get().isFull()) {
+            ctx.recordCascadeError(error.QueueFull);
+            try vm.pushOperand(@as(u64, 6));
+            return;
+        }
+    }
+
+    const accepted = if (ctx.storage) |_| blk: {
+        var previous_entry: ?LwwRegistry.Entry = null;
+        // Update in-memory LWW first.
+        const memory_accepted = blk2: {
+            var store_guard = ctx.lww_store.getMut().lock();
+            defer store_guard.deinit();
+            if (store_guard.get().get(key_str)) |entry| {
+                previous_entry = store_guard.get().cloneEntry(entry) catch {
+                    try vm.pushOperand(@as(u64, 5));
+                    return;
+                };
+            }
+            break :blk2 store_guard.get().put(key_str, ts, parsed_value, cause) catch {
+                if (previous_entry) |entry| store_guard.get().freeEntry(entry);
+                try vm.pushOperand(@as(u64, 5));
+                return;
+            };
+        };
+        if (memory_accepted) {
+            // Accumulate for cascade checkpoint; no WAL write here.
+            _ = ctx.accumulateMutation(.{
+                .namespace = ctx.namespace,
+                .entity = entity_id,
+                .component = component_id,
+                .value = value_bytes,
+                .timestamp = ts,
+                .cause = cause,
+            }, previous_entry) catch {
+                var rollback_guard = ctx.lww_store.getMut().lock();
+                defer rollback_guard.deinit();
+                rollback_guard.get().rollbackPut(key_str, ts, previous_entry) catch |rollback_err| {
+                    ctx.recordCascadeError(rollback_err);
+                };
+                try vm.pushOperand(@as(u64, 5));
+                return;
+            };
+            // Signal dirty so transitive rules fire.
+            var queue_guard = ctx.dirty_queue.getMut().lock();
+            const signal_result = queue_guard.get().push(.{ .entity = entity_id, .component = component_id });
+            queue_guard.deinit();
+            if (signal_result) |_| {} else |err| {
+                // accumulateMutation transferred the snapshot into the
+                // cascade undo log. Discard the whole failed cascade rather
+                // than rolling back this write with a cleared snapshot.
+                ctx.discardCascade();
+                previous_entry = null;
+                ctx.recordCascadeError(err);
+                try vm.pushOperand(@as(u64, 6));
+                return;
+            }
+            previous_entry = null;
+        }
+        if (!memory_accepted) {
+            if (previous_entry) |entry| {
+                var store_guard = ctx.lww_store.getMut().lock();
+                defer store_guard.deinit();
+                store_guard.get().freeEntry(entry);
+            }
+        } else if (previous_entry) |entry| {
+            var store_guard = ctx.lww_store.getMut().lock();
+            defer store_guard.deinit();
+            store_guard.get().freeEntry(entry);
+        }
+        break :blk memory_accepted;
+    } else blk: {
+        var store_guard = ctx.lww_store.getMut().lock();
+        defer store_guard.deinit();
+        const store = store_guard.get();
+        const previous_entry = if (store.get(key_str)) |entry|
+            (store.cloneEntry(entry) catch {
+                try vm.pushOperand(@as(u64, 5));
+                return;
+            })
+        else
+            null;
+        const memory_accepted = store.put(key_str, ts, parsed_value, cause) catch {
+            if (previous_entry) |entry| store.freeEntry(entry);
+            try vm.pushOperand(@as(u64, 5));
+            return;
+        };
+
+        if (memory_accepted) {
+            var queue_guard = ctx.dirty_queue.getMut().lock();
+            defer queue_guard.deinit();
+            queue_guard.get().push(.{
+                .entity = entity_id,
+                .component = component_id,
+            }) catch |err| {
+                store.rollbackPut(key_str, ts, previous_entry) catch |rollback_err| {
+                    ctx.recordCascadeError(rollback_err);
+                    try vm.pushOperand(@as(u64, 5));
+                    return;
+                };
+                ctx.recordCascadeError(err);
+                try vm.pushOperand(@as(u64, 6));
+                return;
+            };
+        }
+        if (!memory_accepted) {
+            if (previous_entry) |entry| store.freeEntry(entry);
+        } else if (previous_entry) |entry| {
+            store.freeEntry(entry);
+        }
+        break :blk memory_accepted;
     };
 
-    if (accepted) {
-        var queue_guard = ctx.dirty_queue.getMut().lock();
-        defer queue_guard.deinit();
-        const queue = queue_guard.get();
-
-        const dirty_entry = types.DirtyEntry{
-            .entity = entity_id,
-            .component = component_id,
-        };
-
-        _ = queue.push(dirty_entry) catch {
-            // Queue full, but we already wrote to store
-            // This is a degradation but acceptable for now
-        };
-    }
+    _ = accepted;
 
     try vm.pushOperand(@as(u64, 0));
 }

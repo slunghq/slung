@@ -75,6 +75,23 @@ pub const QueueInner = struct {
         return item;
     }
 
+    pub fn removeLast(self: *QueueInner, entity: u32, component: u32) bool {
+        if (self.count == 0) return false;
+        var target: ?usize = null;
+        for (0..self.count) |offset| {
+            const index = (self.head + offset) % self.entries.len;
+            const entry = self.entries[index].entry;
+            if (entry.entity == entity and entry.component == component) target = offset;
+        }
+        const target_offset = target orelse return false;
+        const original_count = self.count;
+        for (0..original_count) |offset| {
+            const item = self.pop().?;
+            if (offset != target_offset) self.push(item.entry) catch unreachable;
+        }
+        return true;
+    }
+
     /// Current number of entries in the queue (must hold the lock).
     pub fn size(self: *QueueInner) usize {
         return self.count;
@@ -83,6 +100,10 @@ pub const QueueInner = struct {
     /// Whether the queue is empty (must hold the lock).
     pub fn is_empty(self: *QueueInner) bool {
         return self.count == 0;
+    }
+
+    pub fn is_full(self: *QueueInner) bool {
+        return self.count >= self.entries.len;
     }
 };
 
@@ -145,6 +166,13 @@ pub const DirtyQueue = struct {
         try guard.get().*.push(entry);
     }
 
+    pub fn isFull(self: Self) bool {
+        const mutex = self.shared.getMut();
+        var guard = mutex.lock();
+        defer guard.deinit();
+        return guard.get().*.is_full();
+    }
+
     /// Pop an entry from the queue without blocking (acquires lock).
     /// Returns null if empty.
     pub fn pop(self: Self) ?NamespacedDirtyEntry {
@@ -202,6 +230,13 @@ pub const DirtyQueue = struct {
         guard.get().*.head = 0;
         guard.get().*.tail = 0;
         guard.get().*.count = 0;
+    }
+
+    pub fn removeLast(self: Self, entity: u32, component: u32) bool {
+        const mutex = self.shared.getMut();
+        var guard = mutex.lock();
+        defer guard.deinit();
+        return guard.get().*.removeLast(entity, component);
     }
 };
 

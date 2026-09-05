@@ -1,6 +1,7 @@
 const std = @import("std");
 const zio = @import("zio");
 const slung = @import("slung");
+const Storage = slung.storage.Storage;
 const DeploymentServer = @import("deployment.zig").Server;
 
 const SessionLoad = struct {
@@ -50,6 +51,8 @@ pub const InstanceConfig = struct {
     node_id: []const u8,
     ws_port: u16,
     http_port: u16,
+    storage_path: []const u8,
+    durability: Storage.Durability = .eventual,
 
     pub fn deinit(_: *InstanceConfig, _: std.mem.Allocator) void {}
 };
@@ -59,6 +62,8 @@ pub const DeploymentConfig = struct {
     discovery_port: u16 = 2072,
     ws_port: u16 = 2073,
     http_port: u16 = 2074,
+    storage_path: []const u8 = "slung.db",
+    durability: Storage.Durability = .eventual,
 };
 
 pub const Supervisor = struct {
@@ -94,6 +99,7 @@ const DeploymentHost = struct {
     deployment_server: *DeploymentServer,
     ws_server: *slung.engine.ws.Server,
     http_server: *slung.engine.http.Server,
+    storage: Storage,
     sessions: std.StringHashMapUnmanaged(*slung.engine.ModuleSession) = .empty,
     retired_sessions: std.ArrayListUnmanaged(*slung.engine.ModuleSession) = .empty,
     group: zio.Group,
@@ -101,6 +107,9 @@ const DeploymentHost = struct {
     fn start(allocator: std.mem.Allocator, io: std.Io, config: DeploymentConfig) !*DeploymentHost {
         const host = try allocator.create(DeploymentHost);
         errdefer allocator.destroy(host);
+
+        var storage = try Storage.openWithDurability(allocator, io, config.storage_path, config.durability);
+        errdefer storage.deinit();
 
         const deployment_server = try allocator.create(DeploymentServer);
         errdefer allocator.destroy(deployment_server);
@@ -134,6 +143,7 @@ const DeploymentHost = struct {
             .deployment_server = deployment_server,
             .ws_server = ws_server,
             .http_server = http_server,
+            .storage = storage,
             .group = group,
         };
 
@@ -161,6 +171,7 @@ const DeploymentHost = struct {
         self.allocator.destroy(self.ws_server);
         self.http_server.deinit();
         self.allocator.destroy(self.http_server);
+        self.storage.deinit();
         self.allocator.destroy(self);
     }
 
@@ -172,6 +183,8 @@ const DeploymentHost = struct {
             .node_id = self.node_id,
             .server = self.ws_server,
             .http_server = self.http_server,
+            .storage = &self.storage,
+            .durability = self.storage.durability,
         };
         const log = std.log.scoped(.slung);
         if (self.sessions.fetchRemove(deployment.namespace)) |old| {
@@ -221,6 +234,7 @@ const Instance = struct {
     wasm_bytes: []const u8,
     server: *slung.engine.ws.Server,
     http_server: *slung.engine.http.Server,
+    storage: *Storage,
     session: *slung.engine.ModuleSession,
     group: zio.Group,
 
@@ -236,6 +250,11 @@ const Instance = struct {
         );
         const wasm_bytes = try readFile(allocator, io, module_path);
         errdefer allocator.free(wasm_bytes);
+
+        const storage = try allocator.create(Storage);
+        errdefer allocator.destroy(storage);
+        storage.* = try Storage.openWithDurability(allocator, io, config.storage_path, config.durability);
+        errdefer storage.deinit();
 
         const server = try allocator.create(slung.engine.ws.Server);
         errdefer allocator.destroy(server);
@@ -258,6 +277,8 @@ const Instance = struct {
             .node_id = config.node_id,
             .server = server,
             .http_server = http_server,
+            .storage = storage,
+            .durability = config.durability,
         };
 
         const session = try slung.engine.ModuleSession.init(
@@ -276,6 +297,7 @@ const Instance = struct {
             .wasm_bytes = wasm_bytes,
             .server = server,
             .http_server = http_server,
+            .storage = storage,
             .session = session,
             .group = group,
         };
@@ -292,6 +314,8 @@ const Instance = struct {
         self.allocator.destroy(self.http_server);
         self.server.deinit();
         self.allocator.destroy(self.server);
+        self.storage.deinit();
+        self.allocator.destroy(self.storage);
         self.allocator.free(self.wasm_bytes);
     }
 

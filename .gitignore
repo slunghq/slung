@@ -17,6 +17,8 @@ dist
 *.tmp
 *.dat
 *.db
+*.db*
+*.wal
 
 # local env files
 .env

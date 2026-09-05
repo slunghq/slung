@@ -2,8 +2,16 @@ const std = @import("std");
 const sqlite = @import("slung.zig").sqlite;
 const types = @import("types.zig");
 const Timestamp = @import("primitives/hlc.zig").Timestamp;
+const Wal = @import("wal.zig");
+const build_options = @import("build_options");
 
-const Storage = @This();
+pub const Storage = @This();
+
+const default_durability: Durability = blk: {
+    if (std.mem.eql(u8, build_options.default_durability, "eventual")) break :blk .eventual;
+    if (std.mem.eql(u8, build_options.default_durability, "strict")) break :blk .strict;
+    @compileError("invalid -Ddurability value; expected eventual or strict");
+};
 
 const sqlite_ok = 0;
 const sqlite_row = 100;
@@ -12,30 +20,24 @@ const sqlite_open_readwrite = 0x00000002;
 const sqlite_open_create = 0x00000004;
 const sqlite_open_fullmutex = 0x00010000;
 
-pub const FactMutation = struct {
-    namespace: []const u8,
-    entity: types.EntityId,
-    component: types.ComponentId,
-    value: []const u8,
-    timestamp: Timestamp,
-    cause: types.CausalTag,
-};
-
-pub const PendingDirty = struct {
-    id: i64,
-    namespace: []u8,
-    entity: types.EntityId,
-    component: types.ComponentId,
-
-    pub fn deinit(self: PendingDirty, allocator: std.mem.Allocator) void {
-        allocator.free(self.namespace);
-    }
-};
+pub const FactMutation = Wal.FactMutation;
+pub const Fact = Wal.Fact;
+pub const PendingDirty = Wal.PendingDirty;
+pub const Durability = Wal.Durability;
 
 allocator: std.mem.Allocator,
 db: *sqlite.sqlite3,
+wal: Wal,
+wal_path: []u8,
+temporary_wal: bool,
+io: std.Io,
+durability: Durability = .eventual,
 
-pub fn open(allocator: std.mem.Allocator, path: []const u8) !Storage {
+pub fn open(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Storage {
+    return openWithDurability(allocator, io, path, default_durability);
+}
+
+pub fn openWithDurability(allocator: std.mem.Allocator, io: std.Io, path: []const u8, durability: Durability) !Storage {
     var db: ?*sqlite.sqlite3 = null;
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
@@ -51,125 +53,101 @@ pub fn open(allocator: std.mem.Allocator, path: []const u8) !Storage {
         return error.SqliteOpenFailed;
     }
 
+    const wal_path = if (std.mem.eql(u8, path, ":memory:"))
+        try std.fmt.allocPrint(allocator, ".slung-memory-{x}.wal", .{@intFromPtr(db.?)})
+    else
+        try std.fmt.allocPrint(allocator, "{s}.slung.wal", .{path});
+    errdefer allocator.free(wal_path);
+
     var storage = Storage{
         .allocator = allocator,
         .db = db.?,
+        .wal = undefined,
+        .wal_path = wal_path,
+        .temporary_wal = std.mem.eql(u8, path, ":memory:"),
+        .io = io,
+    };
+    storage.wal = Wal.open(allocator, io, wal_path) catch |err| {
+        _ = sqlite.sqlite3_close(storage.db);
+        return err;
     };
     errdefer storage.deinit();
 
     try storage.configure();
     try storage.createSchema();
+    storage.durability = durability;
     return storage;
 }
 
 pub fn deinit(self: *Storage) void {
+    self.wal.deinit();
+    if (self.temporary_wal) {
+        std.Io.Dir.cwd().deleteFile(self.io, self.wal_path) catch {};
+    }
+    self.allocator.free(self.wal_path);
     _ = sqlite.sqlite3_close(self.db);
 }
 
 /// Applies a fact mutation and creates its pending inference work atomically.
 /// Returns false when the mutation loses the LWW comparison.
 pub fn applyMutation(self: *Storage, mutation: FactMutation) !bool {
-    try self.exec("BEGIN IMMEDIATE;");
-    var committed = false;
-    errdefer if (!committed) self.exec("ROLLBACK;") catch {};
+    var accepted = [_]bool{false};
+    try self.applyMutations(&.{mutation}, accepted[0..]);
+    return accepted[0];
+}
 
-    const fact_stmt = try self.prepare(
-        "INSERT INTO facts (namespace, entity_id, component_id, value, hlc_wall, hlc_logical, hlc_node, cause_component, cause_entity, cause_node) " ++
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " ++
-            "ON CONFLICT(namespace, entity_id, component_id) DO UPDATE SET " ++
-            "value=excluded.value, hlc_wall=excluded.hlc_wall, hlc_logical=excluded.hlc_logical, hlc_node=excluded.hlc_node, " ++
-            "cause_component=excluded.cause_component, cause_entity=excluded.cause_entity, cause_node=excluded.cause_node " ++
-            "WHERE excluded.hlc_wall > facts.hlc_wall " ++
-            "OR (excluded.hlc_wall = facts.hlc_wall AND excluded.hlc_logical > facts.hlc_logical) " ++
-            "OR (excluded.hlc_wall = facts.hlc_wall AND excluded.hlc_logical = facts.hlc_logical AND excluded.hlc_node > facts.hlc_node);",
-    );
-    defer self.finalize(fact_stmt);
+/// Appends a batch to the durable fact journal.
+pub fn applyMutations(
+    self: *Storage,
+    mutations: []const FactMutation,
+    accepted: []bool,
+) !void {
+    try self.wal.enqueueBatch(mutations, accepted, self.durability);
+}
 
-    try bindText(fact_stmt, 1, mutation.namespace);
-    try bindInt64(fact_stmt, 2, mutation.entity);
-    try bindInt64(fact_stmt, 3, mutation.component);
-    try bindBlob(fact_stmt, 4, mutation.value);
-    try bindInt64(fact_stmt, 5, mutation.timestamp.wall);
-    try bindInt64(fact_stmt, 6, mutation.timestamp.logical);
-    try bindInt64(fact_stmt, 7, mutation.timestamp.node_id);
-    try bindInt64(fact_stmt, 8, mutation.cause.cause);
-    try bindInt64(fact_stmt, 9, mutation.cause.entity);
-    try bindText(fact_stmt, 10, mutation.cause.node);
-    try self.step(fact_stmt);
-
-    if (sqlite.sqlite3_changes(self.db) == 0) {
-        try self.exec("ROLLBACK;");
-        committed = true;
-        return false;
-    }
-
-    const mutation_stmt = try self.prepare(
-        "INSERT INTO mutations (namespace, entity_id, component_id, value, hlc_wall, hlc_logical, hlc_node, cause_component, cause_entity, cause_node) " ++
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-    );
-    defer self.finalize(mutation_stmt);
-    try bindText(mutation_stmt, 1, mutation.namespace);
-    try bindInt64(mutation_stmt, 2, mutation.entity);
-    try bindInt64(mutation_stmt, 3, mutation.component);
-    try bindBlob(mutation_stmt, 4, mutation.value);
-    try bindInt64(mutation_stmt, 5, mutation.timestamp.wall);
-    try bindInt64(mutation_stmt, 6, mutation.timestamp.logical);
-    try bindInt64(mutation_stmt, 7, mutation.timestamp.node_id);
-    try bindInt64(mutation_stmt, 8, mutation.cause.cause);
-    try bindInt64(mutation_stmt, 9, mutation.cause.entity);
-    try bindText(mutation_stmt, 10, mutation.cause.node);
-    try self.step(mutation_stmt);
-
-    const dirty_stmt = try self.prepare(
-        "INSERT INTO pending_dirty (namespace, entity_id, component_id) VALUES (?, ?, ?);",
-    );
-    defer self.finalize(dirty_stmt);
-    try bindText(dirty_stmt, 1, mutation.namespace);
-    try bindInt64(dirty_stmt, 2, mutation.entity);
-    try bindInt64(dirty_stmt, 3, mutation.component);
-    try self.step(dirty_stmt);
-
-    try self.exec("COMMIT;");
-    committed = true;
-    return true;
+/// Reads the latest persisted fact for a namespace/entity/component.
+pub fn getFact(
+    self: *Storage,
+    namespace: []const u8,
+    entity: types.EntityId,
+    component: types.ComponentId,
+) !?Fact {
+    return self.wal.getFact(namespace, entity, component);
 }
 
 /// Returns the oldest unacknowledged dirty entry. The caller owns the namespace.
 pub fn nextPendingDirty(self: *Storage) !?PendingDirty {
-    const stmt = try self.prepare(
-        "SELECT id, namespace, entity_id, component_id FROM pending_dirty ORDER BY id LIMIT 1;",
-    );
-    defer self.finalize(stmt);
+    return self.nextPendingDirtyFor(null);
+}
 
-    const rc = sqlite.sqlite3_step(stmt);
-    if (rc == sqlite_done) return null;
-    if (rc != sqlite_row) return self.sqliteError();
+pub fn nextPendingDirtyFor(self: *Storage, namespace: ?[]const u8) !?PendingDirty {
+    return self.wal.nextPendingFor(namespace);
+}
 
-    const namespace_bytes = sqlite.sqlite3_column_blob(stmt, 1) orelse return error.SqliteInvalidRow;
-    const namespace_len: usize = @intCast(sqlite.sqlite3_column_bytes(stmt, 1));
-    const namespace = try self.allocator.dupe(u8, @as([*]const u8, @ptrCast(namespace_bytes))[0..namespace_len]);
-    return .{
-        .id = sqlite.sqlite3_column_int64(stmt, 0),
-        .namespace = namespace,
-        .entity = @intCast(sqlite.sqlite3_column_int64(stmt, 2)),
-        .component = @intCast(sqlite.sqlite3_column_int64(stmt, 3)),
-    };
+/// Writes all rule-produced mutations and the dirty acknowledgement in one WAL record.
+/// Caller must have already updated the LWW store. In-memory WAL state is updated
+/// atomically under the WAL mutex. No blocking task is needed in eventual mode.
+pub fn flushCascade(self: *Storage, mutations: []const FactMutation, ack_id: i64) !void {
+    try self.wal.flushCascade(mutations, ack_id, self.durability);
 }
 
 /// Acknowledges work after the inference step has completed successfully.
 pub fn acknowledgeDirty(self: *Storage, id: i64) !void {
-    const stmt = try self.prepare("DELETE FROM pending_dirty WHERE id = ?;");
-    defer self.finalize(stmt);
-    try bindInt64(stmt, 1, id);
-    try self.step(stmt);
+    const ids = [_]i64{id};
+    try self.acknowledgeDirtyBatch(ids[0..]);
+}
+
+/// Acknowledges several completed inference entries in one transaction.
+pub fn acknowledgeDirtyBatch(self: *Storage, ids: []const i64) !void {
+    for (ids) |id| try self.wal.ack(id);
 }
 
 pub fn pendingDirtyCount(self: *Storage) !u64 {
-    const stmt = try self.prepare("SELECT COUNT(*) FROM pending_dirty;");
-    defer self.finalize(stmt);
-    const rc = sqlite.sqlite3_step(stmt);
-    if (rc != sqlite_row) return self.sqliteError();
-    return @intCast(sqlite.sqlite3_column_int64(stmt, 0));
+    return self.pendingDirtyCountFor(null);
+}
+
+pub fn pendingDirtyCountFor(self: *Storage, namespace: ?[]const u8) !u64 {
+    return self.wal.pendingCountFor(namespace);
 }
 
 /// Reads opaque module-owned data scoped to a namespace, module, and entity.
@@ -253,6 +231,10 @@ pub fn delete(
     try self.exec("COMMIT;");
     committed = true;
     return deleted;
+}
+
+pub fn latestTimestamp(self: *Storage, namespace: []const u8) !?Timestamp {
+    return self.wal.latestTimestamp(namespace);
 }
 
 fn configure(self: *Storage) !void {
@@ -356,7 +338,7 @@ fn bindBlob(stmt: *sqlite.sqlite3_stmt, index: c_int, value: []const u8) !void {
 }
 
 test "Storage: mutation and pending dirty work are atomic" {
-    var storage = try Storage.open(std.testing.allocator, ":memory:");
+    var storage = try Storage.open(std.testing.allocator, std.testing.io, ":memory:");
     defer storage.deinit();
 
     const mutation = FactMutation{
@@ -383,7 +365,7 @@ test "Storage: mutation and pending dirty work are atomic" {
 }
 
 test "Storage: older LWW mutation does not create pending work" {
-    var storage = try Storage.open(std.testing.allocator, ":memory:");
+    var storage = try Storage.open(std.testing.allocator, std.testing.io, ":memory:");
     defer storage.deinit();
 
     const newer = FactMutation{
@@ -409,7 +391,7 @@ test "Storage: older LWW mutation does not create pending work" {
 }
 
 test "Storage: module store is scoped and durable" {
-    var storage = try Storage.open(std.testing.allocator, ":memory:");
+    var storage = try Storage.open(std.testing.allocator, std.testing.io, ":memory:");
     defer storage.deinit();
 
     try storage.set("ns", "module-a", "counter", "42");
@@ -424,4 +406,61 @@ test "Storage: module store is scoped and durable" {
     try std.testing.expect(try storage.delete("ns", "module-a", "counter"));
     try std.testing.expect(!try storage.delete("ns", "module-a", "counter"));
     try std.testing.expect((try storage.get("ns", "module-a", "counter")) == null);
+}
+
+test "Storage: eventual durability owns queued mutation buffers" {
+    var storage = try Storage.open(std.testing.allocator, std.testing.io, ":memory:");
+    defer storage.deinit();
+
+    const namespace = try std.testing.allocator.dupe(u8, "owned");
+    const value = try std.testing.allocator.dupe(u8, "value");
+    const node = try std.testing.allocator.dupe(u8, "node");
+    defer std.testing.allocator.free(namespace);
+    defer std.testing.allocator.free(value);
+    defer std.testing.allocator.free(node);
+
+    try std.testing.expect(try storage.applyMutation(.{
+        .namespace = namespace,
+        .entity = 3,
+        .component = 4,
+        .value = value,
+        .timestamp = .{ .wall = 1, .logical = 0, .node_id = 1 },
+        .cause = .{ .cause = 4, .entity = 3, .node = node },
+    }));
+    @memset(namespace, 'x');
+    @memset(value, 'x');
+    @memset(node, 'x');
+    try std.testing.expectEqual(@as(u64, 1), try storage.pendingDirtyCount());
+}
+
+test "Storage: returns latest namespace timestamp" {
+    var storage = try Storage.open(std.testing.allocator, std.testing.io, ":memory:");
+    defer storage.deinit();
+
+    try std.testing.expect(
+        (try storage.latestTimestamp("test")) == null,
+    );
+
+    try std.testing.expect(try storage.applyMutation(.{
+        .namespace = "test",
+        .entity = 1,
+        .component = 1,
+        .value = "old",
+        .timestamp = .{ .wall = 100, .logical = 2, .node_id = 1 },
+        .cause = .{ .cause = 1, .entity = 1, .node = "node-1" },
+    }));
+
+    try std.testing.expect(try storage.applyMutation(.{
+        .namespace = "test",
+        .entity = 2,
+        .component = 1,
+        .value = "new",
+        .timestamp = .{ .wall = 200, .logical = 0, .node_id = 1 },
+        .cause = .{ .cause = 1, .entity = 2, .node = "node-1" },
+    }));
+
+    const timestamp = (try storage.latestTimestamp("test")).?;
+    try std.testing.expectEqual(@as(u64, 200), timestamp.wall);
+    try std.testing.expectEqual(@as(u32, 0), timestamp.logical);
+    try std.testing.expectEqual(@as(u32, 1), timestamp.node_id);
 }

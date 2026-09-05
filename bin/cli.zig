@@ -9,6 +9,7 @@ const deployment = @import("deployment.zig");
 const InstanceConfig = @import("supervisor.zig").InstanceConfig;
 const DeploymentConfig = @import("supervisor.zig").DeploymentConfig;
 const Supervisor = @import("supervisor.zig").Supervisor;
+const Durability = @import("slung").storage.Storage.Durability;
 
 const Style = struct {
     pub const bold = "\x1b[1m";
@@ -104,6 +105,8 @@ const ModuleOptions = struct {
     node_id: []const u8 = "node-1",
     ws_port: u16 = 2073,
     http_port: u16 = 2074,
+    storage_path: []const u8 = "slung.db",
+    durability: Durability = .eventual,
 
     fn fromParsed(parsed: *const ParsedCommand, file: *const config.Config) ?ModuleOptions {
         const run_config = file.run;
@@ -116,6 +119,8 @@ const ModuleOptions = struct {
             .node_id = parsed.value("--node-id") orelse deployment_config.node_id orelse "node-1",
             .ws_port = parsePort(parsed, "--ws-port", deployment_config.ws_port orelse 2073),
             .http_port = parsePort(parsed, "--http-port", deployment_config.http_port orelse 2074),
+            .storage_path = file.storage.path orelse "slung.db",
+            .durability = parseDurability(file.storage.durability),
         };
     }
 
@@ -126,6 +131,8 @@ const ModuleOptions = struct {
             .node_id = self.node_id,
             .ws_port = self.ws_port,
             .http_port = self.http_port,
+            .storage_path = self.storage_path,
+            .durability = self.durability,
         };
     }
 };
@@ -276,6 +283,14 @@ fn parseCommand(
     return parsed;
 }
 
+fn parseDurability(value: ?[]const u8) Durability {
+    const name = value orelse return .eventual;
+    if (std.mem.eql(u8, name, "eventual")) return .eventual;
+    if (std.mem.eql(u8, name, "strict")) return .strict;
+    printErrorMessageFmt("Invalid storage durability: {s} (expected eventual or strict)", .{name});
+    std.process.exit(2);
+}
+
 fn parsePort(parsed: *const ParsedCommand, alias: []const u8, default: u16) u16 {
     const value = parsed.value(alias) orelse return default;
     return std.fmt.parseInt(u16, value, 10) catch {
@@ -308,6 +323,8 @@ fn cmdRun(allocator: std.mem.Allocator, io: std.Io, parsed: *const ParsedCommand
         .discovery_port = discovery_port,
         .ws_port = ws_port,
         .http_port = http_port,
+        .storage_path = file.storage.path orelse "slung.db",
+        .durability = parseDurability(file.storage.durability),
     });
 }
 

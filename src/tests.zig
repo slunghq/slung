@@ -5,4 +5,5 @@ test {
     _ = @import("wasm/tests.zig");
     _ = @import("engine/tests.zig");
     _ = @import("storage.zig");
+    _ = @import("wal.zig");
 }

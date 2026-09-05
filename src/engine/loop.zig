@@ -61,7 +61,6 @@ pub const InferenceLoop = struct {
     dispatcher: RuleDispatcher,
     max_depth: usize,
     allocator: Allocator,
-
     /// Initialize the inference loop.
     pub fn init(
         context: *Context,
@@ -77,114 +76,161 @@ pub const InferenceLoop = struct {
         };
     }
 
-    /// Run one complete inference cycle.
-    /// Returns the number of rules fired in this cycle.
-    pub fn runCycle(self: *Self) !usize {
+    pub fn deinit(self: *Self) void {
+        _ = self;
+    }
+
+    /// Run one complete inference cycle driven by one dirty entry.
+    /// Returns the number of rules fired and the durable dirty ID (if any).
+    pub fn runCycle(self: *Self) !struct { fired: usize, durable_id: ?i64 } {
+        return self.runCycleWithSource(true);
+    }
+
+    fn runCycleWithSource(self: *Self, use_durable_source: bool) !struct { fired: usize, durable_id: ?i64 } {
         var rules_fired: usize = 0;
 
-        // Poll dirty queue with short timeout
-        const dirty_entry_opt = blk: {
+        var durable_id: ?i64 = null;
+        const dirty_entry = if (use_durable_source and self.context.storage != null) blk: {
+            const pending = (try self.context.nextPendingDirty()) orelse
+                return .{ .fired = 0, .durable_id = null };
+            durable_id = pending.id;
+            defer pending.deinit(self.allocator);
+            break :blk DirtyEntry{ .entity = pending.entity, .component = pending.component };
+        } else blk: {
             var queue_guard = self.context.dirty_queue.getMut().lock();
             defer queue_guard.deinit();
-            break :blk queue_guard.get().pop();
+            const queued = queue_guard.get().pop() orelse
+                return .{ .fired = 0, .durable_id = null };
+            break :blk DirtyEntry{ .entity = queued.entry.entity, .component = queued.entry.component };
         };
 
-        const dirty_entry = dirty_entry_opt orelse return 0; // Queue empty
-
-        // Look up candidate rules via forward index
         const key = graph_index.ForwardKey{
-            .entity = dirty_entry.entry.entity,
-            .component = dirty_entry.entry.component,
+            .entity = dirty_entry.entity,
+            .component = dirty_entry.component,
         };
 
-        const forward_entry = self.context.forward_index.get(key) orelse return 0;
+        const forward_entry = self.context.forward_index.get(key) orelse
+            return .{ .fired = 0, .durable_id = durable_id };
         const candidate_rule_ids = forward_entry.watchers;
 
-        if (candidate_rule_ids.len == 0) {
-            return 0; // No rules watching this component
-        }
+        if (candidate_rule_ids.len == 0)
+            return .{ .fired = 0, .durable_id = durable_id };
 
-        // Build candidate list with priorities
         var candidates = try self.allocator.alloc(Candidate, candidate_rule_ids.len);
         defer self.allocator.free(candidates);
 
         for (candidate_rule_ids, 0..) |rule_id, i| {
             const reverse_entry = self.context.reverse_index.get(rule_id) orelse continue;
-            candidates[i] = .{
-                .rule_id = rule_id,
-                .priority = reverse_entry.priority,
-            };
+            candidates[i] = .{ .rule_id = rule_id, .priority = reverse_entry.priority };
         }
 
-        // Sort candidates by priority (highest first)
         std.mem.sort(Candidate, candidates, {}, Candidate.lessThan);
 
-        // Dispatch each candidate rule (with claim checks)
         for (candidates) |candidate| {
             const rule_id = candidate.rule_id;
-            const entity_id = dirty_entry.entry.entity;
+            const entity_id = dirty_entry.entity;
 
-            // Check claim via Arc<Mutex<>>
             const should_execute = blk: {
                 var claim_guard = self.context.claim_register.getMut().lock();
                 defer claim_guard.deinit();
                 break :blk try claim_guard.get().tryAcquire(self.allocator, rule_id, entity_id);
             };
+            if (!should_execute) continue;
 
-            if (!should_execute) {
-                continue; // Already claimed/executing
-            }
-
-            // Update execution context
             self.context.setCurrentExecution(entity_id, rule_id);
 
-            // Dispatch to Wasm rule entrypoint
-            // Note: rule may call slung_set which writes to LWW and re-dirties queue
             const return_code = self.dispatcher.dispatch(rule_id, entity_id) catch |err| {
-                // Release claim on error
-                {
-                    var claim_guard = self.context.claim_register.getMut().lock();
-                    defer claim_guard.deinit();
-                    claim_guard.get().release(rule_id, entity_id);
-                }
+                var claim_guard = self.context.claim_register.getMut().lock();
+                defer claim_guard.deinit();
+                claim_guard.get().release(rule_id, entity_id);
                 return err;
             };
 
-            // Release claim
             {
                 var claim_guard = self.context.claim_register.getMut().lock();
                 defer claim_guard.deinit();
                 claim_guard.get().release(rule_id, entity_id);
             }
 
-            // Check return code
-            if (return_code != 0) {
-                // Rule returned error; could implement retry logic here
-                // For now, just log and continue
+            if (return_code != 0)
                 std.debug.print("Rule {d} returned error code {d}\n", .{ rule_id, return_code });
-            }
 
             rules_fired += 1;
         }
 
-        return rules_fired;
+        return .{ .fired = rules_fired, .durable_id = durable_id };
     }
 
-    /// Run the full inference loop until convergence or max_depth reached.
+    pub const RunTiming = struct {
+        fired: usize,
+        execution_ns: u64,
+        checkpoint_ns: u64,
+    };
+
+    fn elapsedNs(io: std.Io, start: std.Io.Timestamp) u64 {
+        return @intCast(start.untilNow(io, .awake).toNanoseconds());
+    }
+
+    fn hasReadyWork(self: *Self) bool {
+        var queue_guard = self.context.dirty_queue.getMut().lock();
+        defer queue_guard.deinit();
+        return !queue_guard.get().is_empty();
+    }
+
+    /// Run the full inference cascade from one dirty entry until convergence.
+    /// Flushes all rule-produced outputs as one WAL cascade checkpoint when done.
     /// Returns total number of rules fired.
     pub fn run(self: *Self) !usize {
+        return (try self.runTimed()).fired;
+    }
+
+    /// Benchmark/diagnostic form of run. Separates in-memory rule execution
+    /// from the final cascade checkpoint without changing execution behavior.
+    pub fn runTimed(self: *Self) !RunTiming {
+        self.context.beginCascade();
+        errdefer self.context.discardCascade();
         var total_fired: usize = 0;
+        var durable_id: ?i64 = null;
+        var converged = false;
+        const execution_start = std.Io.Clock.awake.now(self.context.io);
 
-        for (0..self.max_depth) |_| {
-            const fired_this_cycle = try self.runCycle();
-            total_fired += fired_this_cycle;
-
-            if (fired_this_cycle == 0) {
-                break; // Converged; queue is empty
+        for (0..self.max_depth) |depth| {
+            const result = try self.runCycleWithSource(depth == 0);
+            if (self.context.getCascadeError()) |err| {
+                return err;
+            }
+            // Capture the dirty ID from the first cycle; subsequent cycles are
+            // transitive and do not have their own durable IDs.
+            if (durable_id == null) durable_id = result.durable_id;
+            total_fired += result.fired;
+            if (result.fired == 0 and !self.hasReadyWork()) {
+                converged = true;
+                break;
             }
         }
 
-        return total_fired;
+        if (!converged and self.hasReadyWork()) {
+            return error.MaxDepthExceeded;
+        }
+
+        const execution_ns = elapsedNs(self.context.io, execution_start);
+        const checkpoint_start = std.Io.Clock.awake.now(self.context.io);
+
+        // Flush all accumulated cascade outputs + ack the triggering dirty entry.
+        if (durable_id) |id| {
+            self.context.flushCascade(id) catch |err| {
+                std.log.err("cascade flush failed: {}", .{err});
+                return err;
+            };
+        } else {
+            self.context.discardCascade();
+        }
+
+        return .{
+            .fired = total_fired,
+            .execution_ns = execution_ns,
+            .checkpoint_ns = elapsedNs(self.context.io, checkpoint_start),
+        };
     }
 };
 
