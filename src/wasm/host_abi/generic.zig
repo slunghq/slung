@@ -52,9 +52,13 @@ pub fn slung_get(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         var store_guard = ctx.lww_store.getMut().lock();
         defer store_guard.deinit();
         if (store_guard.get().get(key_str)) |entry| {
-            cached_value = entry.value;
+            cached_value = switch (entry.value) {
+                .Bytes => |bytes| .{ .Bytes = try ctx.allocator.dupe(u8, bytes) },
+                else => entry.value,
+            };
         }
     }
+    defer if (cached_value) |value| if (value == .Bytes) ctx.allocator.free(value.Bytes);
 
     const persisted = if (cached_value == null and ctx.storage != null)
         (try ctx.loadFact(entity_id, component_id))
@@ -152,6 +156,29 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
         try vm.pushOperand(@as(u64, 4));
         return;
     };
+
+    if (ctx.storage != null) {
+        var missing = false;
+        {
+            var store_guard = ctx.lww_store.getMut().lock();
+            defer store_guard.deinit();
+            missing = store_guard.get().get(key_str) == null;
+        }
+        if (missing) {
+            if (try ctx.loadFact(entity_id, component_id)) |fact| {
+                defer fact.deinit(ctx.allocator);
+                var store_guard = ctx.lww_store.getMut().lock();
+                defer store_guard.deinit();
+                if (store_guard.get().get(key_str) == null) {
+                    _ = try store_guard.get().put(key_str, fact.timestamp, .{ .Bytes = fact.value }, .{
+                        .cause = fact.cause.cause,
+                        .entity = fact.cause.entity,
+                        .node = ctx.node_id,
+                    });
+                }
+            }
+        }
+    }
 
     // Do not publish a fact that cannot be scheduled. A queue-full signal
     // must fail before LWW or cascade state is mutated.

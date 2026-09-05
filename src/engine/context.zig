@@ -198,19 +198,34 @@ pub const Context = struct {
     /// Updates the LWW store immediately; WAL write is deferred to flushCascade.
     pub fn accumulateMutation(self: *Self, mutation: Storage.FactMutation) !bool {
         // Copy slices because the caller's buffers are transient.
+        const namespace = try self.allocator.dupe(u8, mutation.namespace);
+        const value = self.allocator.dupe(u8, mutation.value) catch |err| {
+            self.allocator.free(namespace);
+            return err;
+        };
+        const cause_node = self.allocator.dupe(u8, mutation.cause.node) catch |err| {
+            self.allocator.free(namespace);
+            self.allocator.free(value);
+            return err;
+        };
         const owned = Storage.FactMutation{
-            .namespace = try self.allocator.dupe(u8, mutation.namespace),
+            .namespace = namespace,
             .entity = mutation.entity,
             .component = mutation.component,
-            .value = try self.allocator.dupe(u8, mutation.value),
+            .value = value,
             .timestamp = mutation.timestamp,
             .cause = .{
                 .cause = mutation.cause.cause,
                 .entity = mutation.cause.entity,
-                .node = try self.allocator.dupe(u8, mutation.cause.node),
+                .node = cause_node,
             },
         };
-        try self.cascade_outputs.append(self.allocator, owned);
+        self.cascade_outputs.append(self.allocator, owned) catch |err| {
+            self.allocator.free(namespace);
+            self.allocator.free(value);
+            self.allocator.free(cause_node);
+            return err;
+        };
         return true;
     }
 
