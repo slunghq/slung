@@ -122,7 +122,6 @@ pub const LwwRegistry = struct {
         if (current.hlc.compare(timestamp) != .eq) return error.RollbackTargetChanged;
         if (previous) |old| {
             self.freeValue(current.value);
-            self.allocator.free(current.cause.node);
             current.* = old;
         } else {
             _ = self.remove(key);

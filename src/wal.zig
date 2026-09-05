@@ -90,6 +90,7 @@ requests: std.ArrayList(*Request) = .empty,
 worker: ?std.Thread = null,
 stopping: bool = false,
 failed: bool = false,
+writing: bool = false,
 
 pub fn init(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !Self {
     return open(allocator, io, path);
@@ -272,6 +273,7 @@ fn workerMain(self: *Self) void {
         // commit group: records are appended in order, followed by one fsync.
         var batch = self.requests;
         self.requests = .empty;
+        self.writing = true;
         self.mutex.unlock(self.io);
 
         var failure: ?anyerror = null;
@@ -353,6 +355,7 @@ fn workerMain(self: *Self) void {
         }
 
         self.mutex.lockUncancelable(self.io);
+        self.writing = false;
         for (batch.items) |request| {
             request.err = failure;
             request.done = true;
@@ -489,18 +492,28 @@ pub fn nextPendingFor(self: *Self, namespace: ?[]const u8) !?PendingDirty {
 }
 
 pub fn ack(self: *Self, id: i64) !void {
-    self.mutex.lockUncancelable(self.io);
-    defer self.mutex.unlock(self.io);
+    while (true) {
+        self.mutex.lockUncancelable(self.io);
+        if (!self.writing) break;
+        self.mutex.unlock(self.io);
+        self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
+    }
     var payload: [8]u8 = undefined;
     std.mem.writeInt(i64, &payload, id, .little);
-    try self.writeRecord(RecordAck, &payload, true);
+    const write_result = self.writeRecord(RecordAck, &payload, true);
+    if (write_result) |_| {} else |err| {
+        self.mutex.unlock(self.io);
+        return err;
+    }
     for (self.pending.items, 0..) |item, i| {
         if (item.id == id) {
             item.deinit(self.allocator);
             _ = self.pending.orderedRemove(i);
+            self.mutex.unlock(self.io);
             return;
         }
     }
+    self.mutex.unlock(self.io);
 }
 
 /// Queues a cascade checkpoint. Eventual mode returns after the checkpoint

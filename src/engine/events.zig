@@ -207,6 +207,7 @@ pub const ModuleSession = struct {
 
     pub fn deinit(self: *Self) void {
         self.closeConnectors() catch {};
+        self.context.deinit();
         self.connectors.deinit();
         self.ws_sources.deinit(self.allocator);
         {
