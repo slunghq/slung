@@ -67,6 +67,8 @@ pub const ModuleSession = struct {
     context: Context,
     clock: Hlc,
     host_fns: ?[]const zwasm.HostFnEntry = null,
+    stop_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    run_forever_active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     const Self = @This();
     const WsRouteSource = struct {
@@ -304,10 +306,15 @@ pub const ModuleSession = struct {
     }
 
     pub fn start(self: *Self) !void {
+        self.stop_requested.store(false, .release);
         try self.setupConnectors();
     }
 
     pub fn stop(self: *Self) !void {
+        self.stop_requested.store(true, .release);
+        while (self.run_forever_active.load(.acquire)) {
+            self.io.sleep(std.Io.Duration.fromNanoseconds(1_000_000), .awake) catch {};
+        }
         try self.closeConnectors();
     }
 
@@ -325,10 +332,13 @@ pub const ModuleSession = struct {
 
     /// Long-lived runtime loop: waits for dirty work and runs inference cycles.
     pub fn runForever(self: *Self) !void {
+        self.stop_requested.store(false, .release);
+        self.run_forever_active.store(true, .release);
+        defer self.run_forever_active.store(false, .release);
         try self.setupConnectors();
         defer self.closeConnectors() catch {};
 
-        while (true) {
+        while (!self.stop_requested.load(.acquire)) {
             if (!try self.step()) {
                 try zio.yield();
             }
