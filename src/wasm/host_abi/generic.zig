@@ -219,7 +219,7 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 .value = value_bytes,
                 .timestamp = ts,
                 .cause = cause,
-            }) catch {
+            }, previous_entry) catch {
                 var rollback_guard = ctx.lww_store.getMut().lock();
                 defer rollback_guard.deinit();
                 rollback_guard.get().rollbackPut(key_str, ts, previous_entry) catch |rollback_err| {
@@ -228,6 +228,7 @@ pub fn slung_set(ctx_ptr: *anyopaque, context: usize) anyerror!void {
                 try vm.pushOperand(@as(u64, 5));
                 return;
             };
+            previous_entry = null;
             // Signal dirty so transitive rules fire.
             var queue_guard = ctx.dirty_queue.getMut().lock();
             const signal_result = queue_guard.get().push(.{ .entity = entity_id, .component = component_id });

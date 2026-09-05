@@ -119,7 +119,14 @@ pub const Context = struct {
     // Cascade accumulator: rule-produced mutations collected during propagation.
     // Flushed to WAL as one checkpoint after cascade convergence.
     cascade_outputs: std.ArrayListUnmanaged(Storage.FactMutation) = .empty,
+    cascade_undo: std.ArrayListUnmanaged(CascadeUndo) = .empty,
     cascade_error: ?anyerror = null,
+
+    const CascadeUndo = struct {
+        key: []u8,
+        timestamp: @import("../primitives/hlc.zig").Timestamp,
+        previous: ?LwwRegistry.Entry,
+    };
 
     pub fn beginCascade(self: *Self) void {
         self.cascade_error = null;
@@ -196,7 +203,7 @@ pub const Context = struct {
 
     /// Records a rule-produced mutation into the cascade accumulator.
     /// Updates the LWW store immediately; WAL write is deferred to flushCascade.
-    pub fn accumulateMutation(self: *Self, mutation: Storage.FactMutation) !bool {
+    pub fn accumulateMutation(self: *Self, mutation: Storage.FactMutation, previous: ?LwwRegistry.Entry) !bool {
         // Copy slices because the caller's buffers are transient.
         const namespace = try self.allocator.dupe(u8, mutation.namespace);
         const value = self.allocator.dupe(u8, mutation.value) catch |err| {
@@ -226,26 +233,70 @@ pub const Context = struct {
             self.allocator.free(cause_node);
             return err;
         };
+        const key = std.fmt.allocPrint(self.allocator, "{s}:{d}:{d}", .{
+            mutation.namespace, mutation.entity, mutation.component,
+        }) catch |err| {
+            const removed = self.cascade_outputs.pop().?;
+            self.allocator.free(removed.namespace);
+            self.allocator.free(removed.value);
+            self.allocator.free(removed.cause.node);
+            return err;
+        };
+        self.cascade_undo.append(self.allocator, .{
+            .key = key,
+            .timestamp = mutation.timestamp,
+            .previous = previous,
+        }) catch |err| {
+            self.allocator.free(key);
+            const removed = self.cascade_outputs.pop().?;
+            self.allocator.free(removed.namespace);
+            self.allocator.free(removed.value);
+            self.allocator.free(removed.cause.node);
+            return err;
+        };
         return true;
     }
 
     /// Writes accumulated cascade outputs + dirty ack as one WAL checkpoint.
     /// Called by the inference loop after a cascade converges.
     pub fn flushCascade(self: *Self, ack_id: i64) !void {
-        defer {
-            for (self.cascade_outputs.items) |m| {
-                self.allocator.free(m.namespace);
-                self.allocator.free(m.value);
-                self.allocator.free(m.cause.node);
-            }
-            self.cascade_outputs.clearRetainingCapacity();
-        }
         const storage = self.storage orelse return;
         try storage.flushCascade(self.cascade_outputs.items, ack_id);
+        for (self.cascade_outputs.items) |m| {
+            self.allocator.free(m.namespace);
+            self.allocator.free(m.value);
+            self.allocator.free(m.cause.node);
+        }
+        self.cascade_outputs.clearRetainingCapacity();
+        var store_guard = self.lww_store.getMut().lock();
+        for (self.cascade_undo.items) |undo| {
+            if (undo.previous) |entry| store_guard.get().freeEntry(entry);
+            self.allocator.free(undo.key);
+        }
+        store_guard.deinit();
+        self.cascade_undo.clearRetainingCapacity();
     }
 
     /// Clears the cascade accumulator without writing (used on error paths).
     pub fn discardCascade(self: *Self) void {
+        var store_guard = self.lww_store.getMut().lock();
+        var undo_index = self.cascade_undo.items.len;
+        while (undo_index > 0) {
+            undo_index -= 1;
+            const undo = &self.cascade_undo.items[undo_index];
+            store_guard.get().rollbackPut(undo.key, undo.timestamp, undo.previous) catch |err| {
+                self.recordCascadeError(err);
+            };
+            undo.previous = null;
+        }
+        store_guard.deinit();
+        for (self.cascade_outputs.items) |mutation| {
+            var queue_guard = self.dirty_queue.getMut().lock();
+            _ = queue_guard.get().*.removeLast(mutation.entity, mutation.component);
+            queue_guard.deinit();
+        }
+        for (self.cascade_undo.items) |undo| self.allocator.free(undo.key);
+        self.cascade_undo.clearRetainingCapacity();
         for (self.cascade_outputs.items) |m| {
             self.allocator.free(m.namespace);
             self.allocator.free(m.value);
@@ -258,6 +309,7 @@ pub const Context = struct {
     pub fn deinit(self: *Self) void {
         self.discardCascade();
         self.cascade_outputs.deinit(self.allocator);
+        self.cascade_undo.deinit(self.allocator);
     }
 
     /// Direct in-memory fact read. No WAL I/O on the hot path.

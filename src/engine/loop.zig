@@ -188,6 +188,7 @@ pub const InferenceLoop = struct {
     /// from the final cascade checkpoint without changing execution behavior.
     pub fn runTimed(self: *Self) !RunTiming {
         self.context.beginCascade();
+        errdefer self.context.discardCascade();
         var total_fired: usize = 0;
         var durable_id: ?i64 = null;
         var converged = false;
@@ -196,7 +197,6 @@ pub const InferenceLoop = struct {
         for (0..self.max_depth) |depth| {
             const result = try self.runCycleWithSource(depth == 0);
             if (self.context.getCascadeError()) |err| {
-                self.context.discardCascade();
                 return err;
             }
             // Capture the dirty ID from the first cycle; subsequent cycles are
@@ -209,8 +209,7 @@ pub const InferenceLoop = struct {
             }
         }
 
-        if (!converged and self.context.storage != null and self.hasReadyWork()) {
-            self.context.discardCascade();
+        if (!converged and self.hasReadyWork()) {
             return error.MaxDepthExceeded;
         }
 
@@ -221,7 +220,6 @@ pub const InferenceLoop = struct {
         if (durable_id) |id| {
             self.context.flushCascade(id) catch |err| {
                 std.log.err("cascade flush failed: {}", .{err});
-                self.context.discardCascade();
                 return err;
             };
         } else {
