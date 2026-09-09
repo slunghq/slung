@@ -30,24 +30,26 @@
         };
 
         mkZigShell = v: pkgs.mkShell {
-          buildInputs = [ zig.${v} ];
+          buildInputs = [ zig.${v} pkgs.tinygo pkgs.go_1_25 ];
 
           shellHook = ''
             echo "slung development environment loaded:"
             echo ""
             echo "  zig version: $(zig version)"
+            echo "  tinygo version: $(tinygo version)"
             echo "  zls version: $(zls version)"
             echo ""
           '';
         };
 
         mkLspShell = v: pkgs.mkShell {
-          buildInputs = [ zig.${v} zls.${v} ];
+          buildInputs = [ zig.${v} zls.${v} pkgs.tinygo pkgs.go_1_25 ];
 
           shellHook = ''
             echo "slung development environment loaded:"
             echo ""
             echo "  zig version: $(zig version)"
+            echo "  tinygo version: $(tinygo version)"
             echo "  zls version: $(zls version)"
             echo ""
           '';

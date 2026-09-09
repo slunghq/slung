@@ -177,6 +177,33 @@ pub const ModuleSession = struct {
 
         session.context.module = session.wasm_module;
 
+        // TinyGo initializes its runtime from `_start`. Rust WASI modules
+        // also export `_start`, but that is their application entrypoint and
+        // must not be invoked by the host. The asyncify exports identify the
+        // TinyGo ABI without relying on compiler-specific names in Rust.
+        var has_tinygo_asyncify = false;
+        var has_rust_main = false;
+        var has_start = false;
+        for (session.wasm_module.export_fns) |export_info| {
+            if (std.mem.eql(u8, export_info.name, "asyncify_start_unwind")) {
+                has_tinygo_asyncify = true;
+            } else if (std.mem.eql(u8, export_info.name, "__main_void")) {
+                has_rust_main = true;
+            } else if (std.mem.eql(u8, export_info.name, "_start")) {
+                has_start = true;
+            }
+        }
+        if (has_tinygo_asyncify and has_start and !has_rust_main) {
+            var init_results = [_]u64{0};
+            session.wasm_module.invoke("_start", &.{}, init_results[0..]) catch |err| {
+                if (session.wasm_module.getWasiExitCode()) |code| {
+                    if (code != 0) return err;
+                } else {
+                    return err;
+                }
+            };
+        }
+
         try wasm_wire.wire(
             allocator,
             session.wasm_module,
