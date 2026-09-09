@@ -8,7 +8,8 @@ MODULE="$EXAMPLE_DIR/target/wasm32-wasip1/release/webhook.wasm"
 slung_pid=""
 cleanup() {
     if [ -n "$slung_pid" ]; then kill "$slung_pid" 2>/dev/null || true; fi
-    pkill -TERM -f '[s]lung.*dev' 2>/dev/null || true
+    # Clean stale webhook runtimes without killing unrelated Slung tests.
+    pkill -TERM -f '[s]lung.*webhook_test' 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 

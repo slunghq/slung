@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../../../.." && pwd)
-EXAMPLE_DIR="$ROOT/sdks/pipeline/rust/examples/http"
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)
+EXAMPLE_DIR="$ROOT/sdks/rust/examples/http"
 MODULE="$EXAMPLE_DIR/target/wasm32-wasip1/release/http.wasm"
 
 server_pid=""
@@ -10,8 +10,9 @@ slung_pid=""
 cleanup() {
     if [ -n "$slung_pid" ]; then kill "$slung_pid" 2>/dev/null || true; fi
     if [ -n "$server_pid" ]; then kill "$server_pid" 2>/dev/null || true; fi
-    pkill -TERM -f '[s]lung.*dev' 2>/dev/null || true
-    pkill -TERM -f '[c]argo run --bin test_server' 2>/dev/null || true
+    # Clean stale processes from this example only; do not kill other Slung runs.
+    pkill -TERM -f '[s]lung.*http_test' 2>/dev/null || true
+    pkill -TERM -f '[c]argo run --bin test_server.*examples/http' 2>/dev/null || true
     pkill -TERM -f '/examples/http/target/debug/test_server' 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -73,4 +74,3 @@ done
 
 curl -fsS http://127.0.0.1:2080/verify
 echo
-
